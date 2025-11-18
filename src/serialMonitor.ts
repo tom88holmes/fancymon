@@ -8,6 +8,7 @@ export interface SerialMonitorConfig {
 	dataBits: 7 | 8;
 	stopBits: 1 | 2;
 	parity: 'none' | 'even' | 'odd';
+	maxLines?: number;
 }
 
 type SerialPortType = any; // Will be the SerialPort type from serialport module
@@ -73,12 +74,32 @@ export class SerialMonitor {
 					retainContextWhenHidden: true,
 					localResourceRoots: [
 						vscode.Uri.joinPath(this.context.extensionUri, 'media')
-					]
+					],
+					enableCommandUris: true
 				}
 			);
 			console.log('FancyMon: Webview panel created');
 
-			this.panel.webview.html = this.getWebviewContent();
+			const htmlContent = this.getWebviewContent();
+			console.log('FancyMon: HTML content generated, length:', htmlContent.length);
+			console.log('FancyMon: HTML contains script tag:', htmlContent.includes('<script>'));
+			console.log('FancyMon: HTML contains status element:', htmlContent.includes('id="status"'));
+			
+			// Debug: Log the script section to find syntax errors
+			const scriptStart = htmlContent.indexOf('<script>');
+			const scriptEnd = htmlContent.indexOf('</script>', scriptStart);
+			if (scriptStart !== -1 && scriptEnd !== -1) {
+				const scriptContent = htmlContent.substring(scriptStart + 8, scriptEnd);
+				const scriptLines = scriptContent.split('\n');
+				console.log('FancyMon: Script has', scriptLines.length, 'lines');
+				if (scriptLines.length >= 1060) {
+					console.log('FancyMon: Line 1060:', scriptLines[1059]);
+					console.log('FancyMon: Line 1059:', scriptLines[1058]);
+					console.log('FancyMon: Line 1061:', scriptLines[1060]);
+				}
+			}
+			
+			this.panel.webview.html = htmlContent;
 			console.log('FancyMon: Webview HTML set');
 
 			this.panel.onDidDispose(() => {
@@ -108,6 +129,15 @@ export class SerialMonitor {
 						break;
 					case 'save':
 						await this.saveToFile(message.content);
+						break;
+					case 'updateConfig':
+						// Update and save configuration (e.g., when maxLines changes)
+						const currentConfig = this.getLastConfig();
+						const updatedConfig: SerialMonitorConfig = {
+							...(currentConfig || {}),
+							...message.config
+						};
+						this.saveConfig(updatedConfig);
 						break;
 					default:
 						console.warn('FancyMon: Unknown command:', message.command);
@@ -462,6 +492,12 @@ export class SerialMonitor {
 	}
 
 	private getWebviewContent(): string {
+		// Use VS Code's CSP source for script nonce (VS Code handles CSP automatically)
+		const cspSource = this.panel?.webview.cspSource || '';
+		// Extract nonce from cspSource (it's usually in format like "vscode-webview://...")
+		// VS Code expects the nonce to match what it generates
+		const nonce = cspSource || '';
+		
 		return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -591,6 +627,60 @@ export class SerialMonitor {
 			line-height: 1.4;
 			white-space: pre-wrap;
 			word-wrap: break-word;
+			position: relative;
+		}
+		
+		/* Custom scrollbar styling */
+		.monitor::-webkit-scrollbar {
+			width: 12px;
+		}
+		
+		.monitor::-webkit-scrollbar-track {
+			background: var(--vscode-scrollbarSlider-background);
+			border-radius: 6px;
+		}
+		
+		.monitor::-webkit-scrollbar-thumb {
+			background: var(--vscode-scrollbarSlider-activeBackground);
+			border-radius: 6px;
+		}
+		
+		.monitor::-webkit-scrollbar-thumb:hover {
+			background: var(--vscode-scrollbarSlider-hoverBackground);
+		}
+		
+		/* Scrollbar indicator for frozen position */
+		.scrollbar-indicator {
+			position: absolute;
+			right: 0;
+			width: 12px;
+			background-color: var(--vscode-textLink-foreground);
+			opacity: 0.8;
+			pointer-events: none;
+			z-index: 100;
+			display: none;
+			border-radius: 2px;
+			box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+		}
+		
+		.monitor.frozen .scrollbar-indicator {
+			display: block;
+		}
+
+		.line {
+			display: block;
+			white-space: pre-wrap;
+			word-break: break-word;
+		}
+
+		.line-buffer {
+			opacity: 0.8;
+		}
+
+		.line {
+			display: block;
+			white-space: pre-wrap;
+			word-break: break-word;
 		}
 
 		/* ANSI color classes */
@@ -709,7 +799,9 @@ export class SerialMonitor {
 		<button id="saveBtn">Save to File</button>
 	</div>
 
-	<div class="monitor" id="monitor"></div>
+	<div class="monitor" id="monitor">
+		<div class="scrollbar-indicator" id="scrollbarIndicator"></div>
+	</div>
 
 	<div class="send-area">
 		<input type="text" id="sendInput" placeholder="Type message to send..." disabled>
@@ -719,7 +811,38 @@ export class SerialMonitor {
 	<div class="status" id="status">Disconnected</div>
 
 	<script>
-		const vscode = acquireVsCodeApi();
+		// Use DOMContentLoaded to ensure DOM is ready
+		document.addEventListener('DOMContentLoaded', function() {
+			console.log('FancyMon: DOMContentLoaded fired');
+			const statusEl = document.getElementById('status');
+			if (statusEl) {
+				statusEl.textContent = 'Script loading...';
+				console.log('FancyMon: Status updated to Script loading...');
+			} else {
+				console.error('FancyMon: Status element not found!');
+			}
+		});
+		
+		// Also try immediate execution
+		(function() {
+			console.log('FancyMon: IIFE executing immediately');
+			const statusEl = document.getElementById('status');
+			if (statusEl) {
+				statusEl.textContent = 'IIFE executed';
+				console.log('FancyMon: Status updated by IIFE');
+			}
+		})();
+		
+		try {
+			console.log('FancyMon: Script starting...');
+			const status = document.getElementById('status');
+			if (status) {
+				status.textContent = 'Initializing...';
+				console.log('FancyMon: Status updated to Initializing...');
+			}
+			
+			const vscode = acquireVsCodeApi();
+			console.log('FancyMon: vscode API acquired:', typeof vscode);
 		
 		let isConnected = false;
 		let isDisconnecting = false;
@@ -727,6 +850,16 @@ export class SerialMonitor {
 		let lastScrollTop = 0; // Track previous scroll position to detect scroll direction
 		const monitor = document.getElementById('monitor');
 		const portSelect = document.getElementById('portSelect');
+		
+		console.log('FancyMon: Elements found - monitor:', monitor, 'portSelect:', portSelect);
+		
+		if (!portSelect) {
+			console.error('FancyMon: CRITICAL - portSelect element not found in DOM!');
+			if (status) {
+				status.textContent = 'Error: portSelect not found';
+				status.className = 'status error';
+			}
+		}
 		const baudRate = document.getElementById('baudRate');
 		const customBaudRate = document.getElementById('customBaudRate');
 		const dataBits = document.getElementById('dataBits');
@@ -738,13 +871,24 @@ export class SerialMonitor {
 		const sendInput = document.getElementById('sendInput');
 		const sendBtn = document.getElementById('sendBtn');
 		const refreshPorts = document.getElementById('refreshPorts');
-		const status = document.getElementById('status');
+		// status already declared above
 		const maxLinesInput = document.getElementById('maxLines');
 		const lineUsage = document.getElementById('lineUsage');
 		const saveBtn = document.getElementById('saveBtn');
+		const scrollbarIndicator = document.getElementById('scrollbarIndicator');
 		
 		let maxLines = 10000;
 		let lineCount = 0;
+		let totalTrimmedLines = 0;
+		let isFrozenView = false;
+		let frozenAnchorLine = null;
+		let frozenAnchorOffset = 0;
+		let anchorLostScrollTop = null; // Track scroll position when anchor was lost
+		
+		// Raw text storage - stores lines as strings with ANSI codes preserved
+		let rawLines = [];
+		let filterPattern = ''; // For future filtering feature
+		const newlineChar = String.fromCharCode(10);
 
 		function getBaudRate() {
 			if (customBaudRate.value && parseInt(customBaudRate.value) > 0) {
@@ -814,15 +958,16 @@ export class SerialMonitor {
 			return classes.length > 0 ? ' class="' + classes.join(' ') + '"' : '';
 		}
 
-		function parseAnsi(text) {
+		function parseAnsi(text, initialState = null) {
 			// ANSI escape sequence: ESC[ (0x1B)
-			// Use String.fromCharCode to avoid escape sequence issues in template string
-			const escChar = String.fromCharCode(0x1b);
-			// Escape the bracket for regex, then build the pattern
-			const ansiRegex = new RegExp(escChar + '\\\\[([0-9;]*)([a-zA-Z])', 'g');
+			// Use character code escape sequence in regex pattern string
+			// \\x1b = literal "\x1b" sequence for RegExp constructor
+			const pattern = '\\\\x1b\\\\[([0-9;]*)([a-zA-Z])';
+			const ansiRegex = new RegExp(pattern, 'g');
 			let lastIndex = 0;
 			let result = '';
-			let state = { ...currentAnsiState };
+			// Use provided initial state or current global state
+			let state = initialState ? { ...initialState } : { ...currentAnsiState };
 			let match;
 
 			while ((match = ansiRegex.exec(text)) !== null) {
@@ -897,17 +1042,26 @@ export class SerialMonitor {
 				}
 			}
 
-			// Update global state
+			// Update global state (for continuity across renders)
 			currentAnsiState = state;
 
-			return result;
+			return { html: result, finalState: state };
+		}
+
+
+		function getLineHeightEstimate() {
+			if (!monitor) {
+				return 16;
+			}
+			const computedStyle = window.getComputedStyle(monitor);
+			const lineHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.4;
+			return lineHeight || 16;
 		}
 
 		function isAtBottom() {
 			// Check if scrolled to within 10 lines of the bottom
-			// Calculate approximate line height from computed styles
-			const computedStyle = window.getComputedStyle(monitor);
-			const lineHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.4;
+			if (!monitor) return true; // Default to bottom if monitor doesn't exist
+			const lineHeight = getLineHeightEstimate();
 			const linesThreshold = 10;
 			const pixelThreshold = lineHeight * linesThreshold;
 			
@@ -915,91 +1069,115 @@ export class SerialMonitor {
 			return distanceFromBottom <= pixelThreshold;
 		}
 
-		function countLines(text) {
-			// Count newlines in text (approximate line count)
-			return (text.match(/\\n/g) || []).length + (text.endsWith('\\n') ? 0 : 1);
+		function getAnchorLineInfo(scrollTop) {
+			if (!monitor) {
+				return null;
+			}
+			const lineElements = monitor.querySelectorAll('.line[data-line]');
+			for (const el of lineElements) {
+				if (!(el instanceof HTMLElement)) continue;
+				const top = el.offsetTop;
+				const height = el.offsetHeight;
+				if (top + height > scrollTop) {
+					const lineAttr = el.getAttribute('data-line');
+					if (!lineAttr) {
+						continue;
+					}
+					return {
+						line: parseInt(lineAttr, 10),
+						offset: scrollTop - top
+					};
+				}
+			}
+			return null;
+		}
+		
+		function updateScrollbarIndicator() {
+			if (!monitor || !scrollbarIndicator || !isFrozenView || frozenAnchorLine === null) {
+				if (scrollbarIndicator) {
+					scrollbarIndicator.style.display = 'none';
+				}
+				if (monitor) {
+					monitor.classList.remove('frozen');
+				}
+				return;
+			}
+			
+			// Find the element with the frozen anchor line number
+			const anchorEl = monitor.querySelector('.line[data-line="' + frozenAnchorLine + '"]');
+			if (!(anchorEl instanceof HTMLElement)) {
+				scrollbarIndicator.style.display = 'none';
+				monitor.classList.remove('frozen');
+				return;
+			}
+			
+			// Calculate position as percentage of scroll height
+			const scrollHeight = monitor.scrollHeight;
+			const clientHeight = monitor.clientHeight;
+			if (scrollHeight <= clientHeight) {
+				scrollbarIndicator.style.display = 'none';
+				monitor.classList.remove('frozen');
+				return;
+			}
+			
+			// Position indicator at the frozen anchor line position
+			const anchorTop = anchorEl.offsetTop + frozenAnchorOffset;
+			const percentage = anchorTop / scrollHeight;
+			
+			// Position indicator on the scrollbar track (12px wide)
+			// The indicator should be a small marker (about 4px tall) at the frozen position
+			const indicatorHeight = 4;
+			const top = percentage * clientHeight;
+			
+			scrollbarIndicator.style.top = top + 'px';
+			scrollbarIndicator.style.height = indicatorHeight + 'px';
+			scrollbarIndicator.style.display = 'block';
+			
+			// Add frozen class to show indicator
+			if (!monitor.classList.contains('frozen')) {
+				monitor.classList.add('frozen');
+			}
 		}
 
-		function extractAnsiStateFromLastSpan() {
-			// Extract ANSI state from the last span element in the monitor
-			// This represents the state at the end of kept content (where new data continues)
-			const allSpans = monitor.querySelectorAll('span');
-			if (allSpans.length > 0) {
-				const lastSpan = allSpans[allSpans.length - 1];
-				const classes = lastSpan.className.split(' ');
-				const state = {
-					fg: null,
-					bg: null,
-					bold: false,
-					dim: false,
-					italic: false,
-					underline: false
-				};
-				
-				classes.forEach(cls => {
-					if (cls.startsWith('ansi-')) {
-						const colorName = cls.substring(5);
-						if (colorName.startsWith('bright-')) {
-							state.fg = 'ansi-bright-' + colorName.substring(7);
-						} else if (['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'].includes(colorName)) {
-							state.fg = 'ansi-' + colorName;
-						} else if (colorName === 'bold') state.bold = true;
-						else if (colorName === 'dim') state.dim = true;
-						else if (colorName === 'italic') state.italic = true;
-						else if (colorName === 'underline') state.underline = true;
-					}
-				});
-				
-				return state;
+		function freezeView() {
+			if (!monitor) {
+				return;
 			}
-			// Default: no ANSI state (reset)
-			return { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
+			const anchorInfo = getAnchorLineInfo(monitor.scrollTop);
+			if (anchorInfo) {
+				frozenAnchorLine = anchorInfo.line;
+				frozenAnchorOffset = anchorInfo.offset;
+			} else {
+				frozenAnchorLine = totalTrimmedLines + 1;
+				frozenAnchorOffset = 0;
+			}
+			isFrozenView = true;
+			updateScrollbarIndicator();
+		}
+		
+		function unfreezeView() {
+			isFrozenView = false;
+			frozenAnchorLine = null;
+			frozenAnchorOffset = 0;
+			if (monitor) {
+				monitor.classList.remove('frozen');
+			}
+			if (scrollbarIndicator) {
+				scrollbarIndicator.style.display = 'none';
+			}
 		}
 
 		function trimOldLines() {
-			// Count lines by counting newlines in text content
-			const text = monitor.textContent || '';
-			lineCount = (text.match(/\\n/g) || []).length + (text.endsWith('\\n') ? 0 : 1);
-			
-			if (lineCount > maxLines) {
-				const linesToRemove = lineCount - maxLines;
-				console.log('FancyMon: Trimming', linesToRemove, 'old lines (preserving ANSI state)');
+			// Trim old lines from raw text array
+			if (rawLines.length > maxLines) {
+				const linesToRemove = rawLines.length - maxLines;
 				
-				// Remove nodes from the start until we've removed enough lines
-				const childNodes = Array.from(monitor.childNodes);
-				let removedNewlines = 0;
-				const nodesToRemove = [];
+				// Remove old lines from the start
+				rawLines.splice(0, linesToRemove);
+				lineCount = rawLines.length;
+				totalTrimmedLines += linesToRemove;
 				
-				for (const node of childNodes) {
-					const nodeText = node.textContent || '';
-					const nodeNewlines = (nodeText.match(/\\n/g) || []).length;
-					
-					if (removedNewlines + nodeNewlines <= linesToRemove) {
-						nodesToRemove.push(node);
-						removedNewlines += nodeNewlines;
-						
-						if (removedNewlines >= linesToRemove) {
-							break;
-						}
-					} else {
-						// This node contains the cut point - remove it too to be safe
-						nodesToRemove.push(node);
-						break;
-					}
-				}
-				
-				// Remove the nodes (this preserves ANSI state in remaining nodes)
-				nodesToRemove.forEach(node => node.remove());
-				
-				// CRITICAL: Reset currentAnsiState to match the state at the end of kept content
-				// This ensures new data continues with the correct ANSI state
-				currentAnsiState = extractAnsiStateFromLastSpan();
-				console.log('FancyMon: Reset ANSI state after trim:', currentAnsiState);
-				
-				// Recalculate line count
-				const remainingText = monitor.textContent || '';
-				lineCount = (remainingText.match(/\\n/g) || []).length + (remainingText.endsWith('\\n') ? 0 : 1);
-				console.log('FancyMon: Trimmed to', lineCount, 'lines (ANSI state preserved)');
+				// Don't render here - let appendData() handle rendering based on frozen state
 			}
 		}
 
@@ -1010,72 +1188,282 @@ export class SerialMonitor {
 			lineUsage.style.color = color;
 		}
 
+		// Buffer for incomplete lines (data that doesn't end with newline)
+		let lineBuffer = '';
+		
 		function appendData(data) {
 			// CRITICAL: Exit immediately if disconnecting - don't process any data
 			if (isDisconnecting) {
 				return; // Exit silently, don't process data during disconnect
 			}
 			
-			// Parse ANSI codes and convert to HTML
-			const html = parseAnsi(data);
+			// Append new data to buffer
+			lineBuffer += data;
 			
-			// Use more efficient DOM manipulation - append to a temporary element first
-			// This avoids forcing a full HTML reparse of the entire monitor content
-			const tempDiv = document.createElement('div');
-			tempDiv.innerHTML = html;
+			// Split into complete lines (ending with newline) and remaining buffer
+			// Use actual newline character, not escaped string
+			const lines = lineBuffer.split(newlineChar);
 			
-			// Append the new content
-			while (tempDiv.firstChild) {
-				monitor.appendChild(tempDiv.firstChild);
+			// Last element is either empty (if buffer ended with newline) or partial line
+			if (lineBuffer.endsWith(newlineChar)) {
+				// All lines are complete, buffer is empty
+				lineBuffer = '';
+				// Remove empty last element
+				lines.pop();
+			} else {
+				// Last element is incomplete, keep it in buffer
+				lineBuffer = lines.pop() || '';
 			}
 			
-			// Count lines more efficiently - increment instead of recounting everything
-			// Count newlines in new data (each newline = one new line)
-			const newlineCount = (data.match(/\\n/g) || []).length;
-			if (newlineCount > 0) {
-				lineCount += newlineCount;
+			// Add complete lines to raw storage
+			let linesAdded = lines.length;
+			for (const line of lines) {
+				rawLines.push(line + newlineChar);
+				lineCount++;
 			}
-			// If no newlines, it's continuing the current line, so don't increment
 			
-			// Trim old lines if we exceed max (only check periodically for performance)
+			// Trim old lines if we exceed max
 			if (lineCount > maxLines) {
 				trimOldLines();
 			}
 			
-			// Update line usage less frequently for performance
-			if (lineCount % 100 === 0 || lineCount > maxLines * 0.9) {
+			// Update usage whenever new complete lines arrive (or when near limit)
+			if (linesAdded > 0 || lineCount > maxLines * 0.9) {
 				updateLineUsage();
 			}
 			
-			// Only auto-scroll if we're following (user hasn't scrolled up)
-			if (isFollowing) {
-				monitor.scrollTop = monitor.scrollHeight;
-				lastScrollTop = monitor.scrollTop; // Update tracked position when auto-scrolling
+			// Check if frozen view anchor has been trimmed away
+			const anchorTrimmed = isFrozenView && frozenAnchorLine !== null && frozenAnchorLine <= totalTrimmedLines;
+			
+			// If not following (user scrolled up), handle frozen view
+			if (!isFollowing) {
+				// If anchor was lost and we're waiting for user to scroll 20+ lines, render normally
+				if (anchorLostScrollTop !== null && !isFrozenView) {
+					// Render normally maintaining scroll position - don't freeze yet
+					// Keep anchorLostScrollTop fixed - don't update it, we want to track delta from when anchor was lost
+					renderLinesWithBuffer();
+					return;
+				}
+				
+				// Freeze view if not already frozen
+				if (!isFrozenView) {
+					freezeView();
+				}
+				// If anchor hasn't been trimmed, skip rendering completely (frozen view)
+				if (!anchorTrimmed) {
+					return; // Don't render - view is frozen
+				}
+				// Anchor was trimmed - we must re-render, but unfreeze so user can scroll
+				// Record scroll position BEFORE unfreezing (to track how far user scrolls)
+				const currentScrollTop = monitor ? monitor.scrollTop : 0;
+				// Set anchorLostScrollTop BEFORE unfreezing so render knows to skip anchor restoration
+				anchorLostScrollTop = currentScrollTop;
+				unfreezeView();
+				// Render normally maintaining current scroll position (don't scroll to top)
+				// anchorLostScrollTop is set, so render will skip anchor-based restoration
+				renderLinesWithBuffer();
+				// Update anchorLostScrollTop after render in case scroll position changed slightly
+				if (monitor) {
+					anchorLostScrollTop = monitor.scrollTop;
+				}
+				// Don't re-freeze immediately - wait for user to scroll down 20+ lines
+				return;
 			}
+			
+			// We are following - ensure view is not frozen
+			if (isFrozenView) {
+				unfreezeView();
+			}
+			
+			// Re-render all lines (including buffer if it exists)
+			renderLinesWithBuffer();
+		}
+		
+		function renderLinesWithBuffer(forcedAnchorLine, forcedAnchorOffset) {
+			// Safety check - ensure monitor element exists
+			if (!monitor) {
+				console.warn('FancyMon: renderLinesWithBuffer - monitor element not found!');
+				return;
+			}
+			
+			const previousScrollTop = monitor.scrollTop;
+			const shouldStickToBottom = isFollowing;
+			let anchorLineNumber = null;
+			let anchorOffset = 0;
+			
+			if (!shouldStickToBottom) {
+				// If anchor was lost and we're waiting for user to scroll 20+ lines,
+				// don't use anchor-based restoration - just maintain scroll position
+				if (anchorLostScrollTop !== null && !isFrozenView) {
+					// Don't set anchorLineNumber - we'll use previousScrollTop directly
+					anchorLineNumber = null;
+				} else if (forcedAnchorLine !== null && forcedAnchorLine !== undefined) {
+					// If forced anchor provided (e.g., from frozen view), use it
+					anchorLineNumber = forcedAnchorLine;
+					anchorOffset = forcedAnchorOffset || 0;
+				} else if (isFrozenView && frozenAnchorLine !== null) {
+					// If view is frozen, use the frozen anchor position
+					anchorLineNumber = frozenAnchorLine;
+					anchorOffset = frozenAnchorOffset;
+				} else {
+					// Otherwise, calculate from current scroll position
+					const anchorInfo = getAnchorLineInfo(previousScrollTop);
+					if (anchorInfo) {
+						anchorLineNumber = anchorInfo.line;
+						anchorOffset = anchorInfo.offset;
+					}
+				}
+			}
+			
+			// Filter lines if filter pattern is set (for future filtering feature)
+			let lineEntries = rawLines.map((line, idx) => ({
+				text: line,
+				lineNumber: totalTrimmedLines + idx + 1,
+				isBuffer: false
+			}));
+			
+			// Add incomplete buffer line if it exists (for live display)
+			if (lineBuffer) {
+				lineEntries = [...lineEntries, { text: lineBuffer, lineNumber: null, isBuffer: true }];
+			}
+			
+			if (filterPattern) {
+				// Remove ANSI codes for filtering (simple approach - just check if pattern exists in plain text)
+				// Use character code escape sequence in regex pattern string
+				const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
+				const ansiRegex = new RegExp(pattern, 'g');
+				lineEntries = lineEntries.filter(entry => {
+					const plainText = entry.text.replace(ansiRegex, '');
+					return plainText.includes(filterPattern);
+				});
+			}
+			
+			// Convert raw text lines to HTML, maintaining ANSI state across lines
+			let html = '';
+			let state = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
+			
+			for (const entry of lineEntries) {
+				const textForDisplay = entry.text.endsWith(newlineChar) ? entry.text.slice(0, -1) : entry.text;
+				const result = parseAnsi(textForDisplay, state);
+				if (entry.lineNumber !== null && entry.lineNumber !== undefined) {
+					html += '<div class="line" data-line="' + entry.lineNumber + '">' + result.html + '</div>';
+				} else {
+					html += '<div class="line line-buffer">' + result.html + '</div>';
+				}
+				state = result.finalState; // Maintain state across lines
+			}
+			
+			// Update the monitor with rendered HTML
+			monitor.innerHTML = html;
+			
+			// Restore scroll position based on follow state
+			if (shouldStickToBottom) {
+				monitor.scrollTop = monitor.scrollHeight;
+			} else {
+				let restored = false;
+				
+				// If anchor was lost and we're waiting for user to scroll 20+ lines,
+				// just maintain scroll position without anchor-based restoration
+				if (anchorLostScrollTop !== null && anchorLineNumber === null) {
+					const maxScroll = Math.max(0, monitor.scrollHeight - monitor.clientHeight);
+					const targetTop = Math.min(previousScrollTop, maxScroll);
+					monitor.scrollTop = Math.max(0, targetTop);
+					restored = true;
+				} else if (anchorLineNumber !== null) {
+					// Check if anchor line still exists (hasn't been trimmed)
+					if (anchorLineNumber > totalTrimmedLines) {
+						const anchorEl = monitor.querySelector('.line[data-line="' + anchorLineNumber + '"]');
+						if (anchorEl instanceof HTMLElement) {
+							monitor.scrollTop = Math.max(0, anchorEl.offsetTop + anchorOffset);
+							restored = true;
+						}
+					}
+					// If anchor line was trimmed, maintain scroll position if anchorLostScrollTop is set
+					// (user is scrolling after anchor was lost)
+					if (!restored && anchorLineNumber <= totalTrimmedLines) {
+						if (anchorLostScrollTop !== null) {
+							// Maintain scroll position - user is scrolling after anchor was lost
+							const maxScroll = Math.max(0, monitor.scrollHeight - monitor.clientHeight);
+							const targetTop = Math.min(previousScrollTop, maxScroll);
+							monitor.scrollTop = Math.max(0, targetTop);
+							restored = true;
+						} else {
+							// No anchor lost tracking - scroll to top of remaining buffer
+							monitor.scrollTop = 0;
+							restored = true;
+						}
+					}
+				}
+				
+				if (!restored) {
+					const maxScroll = Math.max(0, monitor.scrollHeight - monitor.clientHeight);
+					const targetTop = Math.min(previousScrollTop, maxScroll);
+					monitor.scrollTop = Math.max(0, targetTop);
+				}
+			}
+			lastScrollTop = monitor.scrollTop;
+			
+			// Update global ANSI state for new incoming data
+			currentAnsiState = state;
+			
+			// Update scrollbar indicator if view is frozen
+			updateScrollbarIndicator();
 		}
 
 		// Monitor scroll events to detect when user scrolls up/down
-		monitor.addEventListener('scroll', () => {
-			const currentScrollTop = monitor.scrollTop;
-			const scrolledUp = currentScrollTop < lastScrollTop;
-			const wasFollowing = isFollowing;
-			
-			// Only disable following if user scrolled UP and is not near bottom
-			if (scrolledUp && !isAtBottom()) {
-				isFollowing = false;
-				if (wasFollowing) {
-					console.log('FancyMon: Paused auto-scroll (user scrolled up)');
+		if (monitor) {
+			try {
+				function handleScroll() {
+					if (!monitor) return;
+					const currentScrollTop = monitor.scrollTop;
+					const scrolledUp = currentScrollTop < lastScrollTop;
+					const nearBottom = isAtBottom();
+					const wasFollowing = isFollowing;
+					
+					// Check if anchor was lost and user has scrolled down more than 20 lines
+					// Do this FIRST before other checks to prevent interference
+					if (anchorLostScrollTop !== null && !isFrozenView) {
+						const lineHeight = getLineHeightEstimate();
+						const scrollDelta = currentScrollTop - anchorLostScrollTop;
+						const linesScrolled = scrollDelta / lineHeight;
+						
+						if (linesScrolled > 20) {
+							// User has scrolled down more than 20 lines, re-freeze
+							freezeView();
+							anchorLostScrollTop = null; // Clear the tracking
+							isFollowing = false; // Disable following since we're freezing
+							lastScrollTop = currentScrollTop;
+							return; // Exit early - we've frozen, don't process other scroll logic
+						}
+					}
+					
+					// Only disable following if user scrolled UP and is not near bottom
+					if (scrolledUp && !nearBottom) {
+						if (isFollowing) {
+							isFollowing = false;
+							freezeView();
+							anchorLostScrollTop = null; // Clear anchor lost tracking
+						} else if (!isFrozenView) {
+							freezeView();
+							anchorLostScrollTop = null; // Clear anchor lost tracking
+						}
+					} else if (nearBottom) {
+						// Enable following if within 10 lines of bottom
+						// But don't do this if we're waiting for user to scroll 20+ lines after anchor loss
+						if (!isFollowing && anchorLostScrollTop === null) {
+							isFollowing = true;
+							unfreezeView();
+							renderLinesWithBuffer();
+						}
+					}
+					
+					lastScrollTop = currentScrollTop;
 				}
-			} else if (isAtBottom()) {
-				// Enable following if within 10 lines of bottom
-				isFollowing = true;
-				if (!wasFollowing) {
-					console.log('FancyMon: Resumed auto-scroll (scrolled to within 10 lines of bottom)');
-				}
+				monitor.addEventListener('scroll', handleScroll);
+			} catch (e) {
+				console.error('FancyMon: Error setting up scroll listener:', e);
 			}
-			
-			lastScrollTop = currentScrollTop;
-		});
+		}
 
 		function setStatus(message, type = '') {
 			status.textContent = message;
@@ -1099,7 +1487,8 @@ export class SerialMonitor {
 					baudRate: getBaudRate(),
 					dataBits: parseInt(dataBits.value),
 					stopBits: parseInt(stopBits.value),
-					parity: parity.value
+					parity: parity.value,
+					maxLines: maxLines
 				}
 			});
 		});
@@ -1127,11 +1516,15 @@ export class SerialMonitor {
 		});
 
 		clearBtn.addEventListener('click', () => {
-			monitor.innerHTML = '';
+			rawLines = [];
+			lineBuffer = '';
 			lineCount = 0;
+			totalTrimmedLines = 0;
 			currentAnsiState = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
+			monitor.innerHTML = '';
 			lastScrollTop = 0;
 			isFollowing = true; // Reset to following mode after clear
+			unfreezeView();
 			updateLineUsage();
 			vscode.postMessage({ command: 'clear' });
 		});
@@ -1142,17 +1535,27 @@ export class SerialMonitor {
 				maxLines = newMax;
 				console.log('FancyMon: Max lines set to', maxLines);
 				// Trim if current count exceeds new max
-				if (lineCount > maxLines) {
+				if (rawLines.length > maxLines) {
 					trimOldLines();
 				}
 				updateLineUsage();
+				// Save the updated maxLines setting
+				vscode.postMessage({
+					command: 'updateConfig',
+					config: { maxLines: maxLines }
+				});
 			} else {
 				maxLinesInput.value = maxLines.toString();
 			}
 		});
 
 		saveBtn.addEventListener('click', () => {
-			const content = monitor.textContent || '';
+			// Get raw text content (remove ANSI codes for saving)
+			// Use character code escape sequence in regex pattern string
+			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
+			const ansiRegex = new RegExp(pattern, 'g');
+			const content = (rawLines.join('') + lineBuffer).replace(ansiRegex, '');
+			
 			if (content.trim().length === 0) {
 				vscode.postMessage({ command: 'error', message: 'No data to save' });
 				return;
@@ -1179,13 +1582,29 @@ export class SerialMonitor {
 		});
 
 		// Listen for messages from extension
-		window.addEventListener('message', event => {
-			const message = event.data;
-			
-			switch (message.command) {
+		console.log('FancyMon: Setting up message listener...');
+		if (typeof window !== 'undefined' && window.addEventListener) {
+			window.addEventListener('message', function(event) {
+				try {
+					const message = event.data;
+					if (message?.command !== 'data') {
+						console.log('FancyMon: Received message:', message ? message.command : 'null', message);
+					}
+					
+					if (!message || !message.command) {
+						console.warn('FancyMon: Received invalid message:', message);
+						return;
+					}
+					
+					switch (message.command) {
 				case 'portsListed':
 					console.log('FancyMon: Received ports list:', message.ports);
 					console.log('FancyMon: Last config:', message.lastConfig);
+					console.log('FancyMon: portSelect element:', portSelect);
+					if (!portSelect) {
+						console.error('FancyMon: portSelect element not found!');
+						return;
+					}
 					portSelect.innerHTML = '<option value="">Select port...</option>';
 					if (message.ports && message.ports.length > 0) {
 						message.ports.forEach(port => {
@@ -1241,6 +1660,13 @@ export class SerialMonitor {
 								parity.value = config.parity;
 							}
 							
+							// Restore max lines
+							if (config.maxLines && maxLinesInput) {
+								maxLines = config.maxLines;
+								maxLinesInput.value = config.maxLines.toString();
+								updateLineUsage();
+							}
+							
 							// Auto-connect if we have a valid configuration
 							if (shouldAutoConnect && config.port && config.baudRate) {
 								console.log('FancyMon: Auto-connecting with restored configuration...');
@@ -1292,6 +1718,8 @@ export class SerialMonitor {
 					// Double-check we're not disconnecting before processing
 					if (!isDisconnecting) {
 						appendData(message.data);
+					} else {
+						console.log('FancyMon: Ignoring data - disconnecting');
 					}
 					break;
 					
@@ -1300,15 +1728,27 @@ export class SerialMonitor {
 					break;
 					
 				case 'clear':
-					monitor.innerHTML = '';
+					rawLines = [];
+					lineBuffer = '';
 					lineCount = 0;
 					currentAnsiState = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
+					monitor.innerHTML = '';
 					lastScrollTop = 0;
 					isFollowing = true; // Reset to following mode after clear
 					updateLineUsage();
 					break;
-			}
-		});
+					
+				default:
+					console.warn('FancyMon: Unknown command:', message.command);
+					break;
+				}
+				} catch (e) {
+					console.error('FancyMon: Error handling message:', e, event.data);
+				}
+			});
+		} else {
+			console.error('FancyMon: window.addEventListener not available!');
+		}
 
 		// Initialize maxLines from input field
 		if (maxLinesInput) {
@@ -1317,33 +1757,66 @@ export class SerialMonitor {
 		updateLineUsage();
 		
 		// Initialize scroll tracking
-		lastScrollTop = monitor.scrollTop;
+		if (monitor) {
+			lastScrollTop = monitor.scrollTop;
 
-		// Handle window resize to ensure monitor fills available space
-		const resizeObserver = new ResizeObserver(() => {
-			// If following, scroll to bottom after resize
-			if (isFollowing) {
-				monitor.scrollTop = monitor.scrollHeight;
-				lastScrollTop = monitor.scrollTop;
-			}
-		});
-		resizeObserver.observe(document.body);
+			// Handle window resize to ensure monitor fills available space
+			const resizeObserver = new ResizeObserver(() => {
+				// If following, scroll to bottom after resize
+				if (isFollowing && monitor) {
+					monitor.scrollTop = monitor.scrollHeight;
+					lastScrollTop = monitor.scrollTop;
+				}
+			});
+			resizeObserver.observe(document.body);
 
-		// Also listen to window resize events
-		window.addEventListener('resize', () => {
-			// If following, scroll to bottom after resize
-			if (isFollowing) {
-				monitor.scrollTop = monitor.scrollHeight;
-				lastScrollTop = monitor.scrollTop;
-			}
-		});
+			// Also listen to window resize events
+			window.addEventListener('resize', () => {
+				// If following, scroll to bottom after resize
+				if (isFollowing && monitor) {
+					monitor.scrollTop = monitor.scrollHeight;
+					lastScrollTop = monitor.scrollTop;
+				}
+			});
+		}
 
 		// Initial port list - wait a bit for the message handler to be ready
-		setTimeout(() => {
+		console.log('FancyMon: Setting up initial port list request...');
+		console.log('FancyMon: vscode object check:', typeof vscode, vscode);
+		console.log('FancyMon: portSelect check:', portSelect);
+		
+		// Also set a visual indicator that script is running
+		if (status) {
+			status.textContent = 'Initializing...';
+		}
+		
+		function requestPortList() {
 			console.log('FancyMon: Webview loaded, requesting port list...');
-			vscode.postMessage({ command: 'listPorts' });
+			console.log('FancyMon: vscode object:', typeof vscode);
+			console.log('FancyMon: portSelect element:', portSelect);
+			if (vscode && vscode.postMessage) {
+				vscode.postMessage({ command: 'listPorts' });
+				console.log('FancyMon: Port list request sent');
+				if (status) {
+					status.textContent = 'Requesting ports...';
+				}
+			} else {
+				console.error('FancyMon: vscode.postMessage not available!');
+				if (status) {
+					status.textContent = 'Error: vscode API not available';
+					status.className = 'status error';
+				}
+			}
 			updateUI();
-		}, 100);
+		}
+		setTimeout(requestPortList, 100);
+		} catch (e) {
+			console.error('FancyMon: Fatal error in script:', e);
+			if (typeof status !== 'undefined' && status) {
+				status.textContent = 'Error: ' + (e.message || e);
+				status.className = 'status error';
+			}
+		}
 	</script>
 </body>
 </html>`;
