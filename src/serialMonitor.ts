@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { applyFilter, type LineEntry } from './filter';
 import { getWebviewContentHtml } from './webviewContent';
+import { SerialConnection, type SerialConnectionCallbacks } from './serialConnection';
 
 export interface SerialMonitorConfig {
 	port: string;
@@ -13,32 +14,43 @@ export interface SerialMonitorConfig {
 	maxLines?: number;
 }
 
-type SerialPortType = any; // Will be the SerialPort type from serialport module
 
 export class SerialMonitor {
-	private port: SerialPortType | null = null;
 	public panel: vscode.WebviewPanel | null = null; // Made public for cleanup
-	private isConnected = false;
-	private isDisconnecting = false; // Prevent multiple simultaneous disconnect calls
 	private messageQueue: string[] = [];
-	private serialportModule: any = null;
 	private readonly configKey = 'fancymon.lastConfig';
+	private connection: SerialConnection;
 
-	constructor(private context: vscode.ExtensionContext) {}
-
-	private async getSerialPort(): Promise<typeof import('serialport')> {
-		if (!this.serialportModule) {
-			try {
-				console.log('FancyMon: Loading serialport module...');
-				this.serialportModule = await import('serialport');
-				console.log('FancyMon: Serialport module loaded successfully');
-			} catch (error: any) {
-				console.error('FancyMon: Failed to load serialport module:', error);
-				throw new Error(`Failed to load serialport module: ${error?.message || error}. Make sure serialport is installed with 'npm install'.`);
+	constructor(private context: vscode.ExtensionContext) {
+		// Set up connection with callbacks
+		const callbacks: SerialConnectionCallbacks = {
+			onData: (data: string) => {
+				this.sendMessage({ command: 'data', data });
+			},
+			onError: (error: string) => {
+				this.sendMessage({ command: 'error', message: error });
+			},
+			onClose: () => {
+				this.sendMessage({ command: 'disconnected' });
+			},
+			onConnected: () => {
+				this.sendMessage({ command: 'connected' });
+			},
+			onDisconnected: () => {
+				this.sendMessage({ command: 'disconnected' });
+			},
+			onDisconnecting: (info) => {
+				this.sendMessage({
+					command: 'disconnecting',
+					pendingBytes: info.pendingBytes,
+					pendingChunks: info.pendingChunks,
+					elapsedMs: info.elapsedMs
+				});
 			}
-		}
-		return this.serialportModule;
+		};
+		this.connection = new SerialConnection(callbacks);
 	}
+
 
 	private getBuildNumber(): number {
 		try {
@@ -104,10 +116,10 @@ export class SerialMonitor {
 			this.panel.webview.html = htmlContent;
 			console.log('FancyMon: Webview HTML set');
 
-			this.panel.onDidDispose(() => {
-				this.disconnect();
-				this.panel = null;
-			});
+		this.panel.onDidDispose(() => {
+			this.connection.disconnect();
+			this.panel = null;
+		});
 
 			this.panel.webview.onDidReceiveMessage(async (message) => {
 				console.log('FancyMon: Received message from webview:', message.command, JSON.stringify(message));
@@ -117,15 +129,15 @@ export class SerialMonitor {
 							console.log('FancyMon: Handling listPorts command');
 							await this.listPorts();
 							break;
-						case 'connect':
-							await this.connect(message.config);
-							break;
-						case 'disconnect':
-							await this.disconnect();
-							break;
-						case 'send':
-							await this.sendData(message.data);
-							break;
+					case 'connect':
+						await this.connect(message.config);
+						break;
+					case 'disconnect':
+						await this.disconnect();
+						break;
+					case 'send':
+						await this.connection.sendData(message.data);
+						break;
 					case 'clear':
 						this.sendMessage({ command: 'clear' });
 						break;
@@ -186,9 +198,7 @@ export class SerialMonitor {
 	private async listPorts(): Promise<void> {
 		try {
 			console.log('FancyMon: Listing serial ports...');
-			const serialport = await this.getSerialPort();
-			console.log('FancyMon: SerialPort module loaded, calling list()...');
-			const ports = await serialport.SerialPort.list();
+			const ports = await this.connection.listPorts();
 			console.log(`FancyMon: Found ${ports.length} ports`);
 			
 			const lastConfig = this.getLastConfig();
@@ -203,18 +213,11 @@ export class SerialMonitor {
 				return;
 			}
 
-			const portList = ports.map((p: any) => ({
-				path: p.path,
-				manufacturer: p.manufacturer || 'Unknown',
-				vendorId: p.vendorId,
-				productId: p.productId
-			}));
-
-			console.log('FancyMon: Ports:', portList);
+			console.log('FancyMon: Ports:', ports);
 			console.log('FancyMon: Last config:', lastConfig);
 			this.sendMessage({
 				command: 'portsListed',
-				ports: portList,
+				ports: ports,
 				lastConfig: lastConfig
 			});
 		} catch (error: any) {
@@ -228,227 +231,14 @@ export class SerialMonitor {
 		}
 	}
 
-	private dataHandler: ((data: Buffer) => void) | null = null;
-	private errorHandler: ((err: any) => void) | null = null;
-	private closeHandler: (() => void) | null = null;
-	private shouldProcessData = true; // Flag to immediately stop processing data
-	private pendingDataBytes = 0; // Track bytes still being processed after disconnect
-	private pendingDataChunks = 0; // Track number of data chunks still being processed
-	private disconnectStartTime = 0; // Track when disconnect started
-	private lastDataReceivedTime = 0; // Track when data was last received (for disconnect wait loop)
-
 	private async connect(config: SerialMonitorConfig): Promise<void> {
-		if (this.isConnected) {
-			await this.disconnect();
-		}
-
 		// Save the configuration for next time
 		this.saveConfig(config);
-
-		try {
-			const serialport = await this.getSerialPort();
-			this.port = new serialport.SerialPort({
-				path: config.port,
-				baudRate: config.baudRate,
-				dataBits: config.dataBits,
-				stopBits: config.stopBits,
-				parity: config.parity,
-				autoOpen: false
-			});
-
-			// Set up event handlers before opening (store references for cleanup)
-			this.shouldProcessData = true; // Reset flag when connecting
-			this.pendingDataBytes = 0;
-			this.pendingDataChunks = 0;
-			this.dataHandler = (data: Buffer) => {
-				// ULTRA-CRITICAL: Check ALL flags FIRST before doing ANYTHING
-				// If ANY of these are false/null, exit immediately without any processing
-				if (!this.shouldProcessData || !this.isConnected || !this.port || this.isDisconnecting) {
-					// Exit silently - don't even log to avoid overhead
-					return;
-				}
-				
-				const dataSize = data.length;
-				const timestamp = Date.now();
-				
-				console.log(`FancyMon: Data handler called - size: ${dataSize} bytes`);
-				
-				// Process the data
-				console.log(`FancyMon: Sending data to UI - ${dataSize} bytes`);
-				this.sendMessage({
-					command: 'data',
-					data: data.toString()
-				});
-			};
-
-			this.errorHandler = (err: any) => {
-				if (this.isConnected) { // Only process errors if still connected
-					this.sendMessage({
-						command: 'error',
-						message: `Serial port error: ${err?.message || err}`
-					});
-				}
-			};
-
-			this.closeHandler = () => {
-				this.isConnected = false;
-				this.sendMessage({ command: 'disconnected' });
-			};
-
-			this.port.on('data', this.dataHandler);
-			this.port.on('error', this.errorHandler);
-			this.port.on('close', this.closeHandler);
-
-			// Open the port (promise-based in v11)
-			await this.port.open();
-			
-			this.isConnected = true;
-			this.sendMessage({ command: 'connected' });
-		} catch (error: any) {
-			this.sendMessage({
-				command: 'error',
-				message: `Connection error: ${error?.message || error}`
-			});
-			this.isConnected = false;
-			if (this.port) {
-				this.port = null;
-			}
-		}
+		await this.connection.connect(config);
 	}
 
 	public async disconnect(): Promise<void> {
-		// Prevent multiple simultaneous disconnect calls
-		if (this.isDisconnecting) {
-			console.log('FancyMon: Disconnect already in progress, ignoring');
-			return;
-		}
-		
-		if (this.port) {
-			this.isDisconnecting = true;
-			this.disconnectStartTime = Date.now();
-			this.pendingDataBytes = 0;
-			this.pendingDataChunks = 0;
-			const portToClose = this.port; // Store reference before clearing
-			
-			// CRITICAL: Stop processing data IMMEDIATELY - this must be first!
-			this.shouldProcessData = false;
-			this.isConnected = false;
-			
-			console.log('FancyMon: Disconnect started - data processing stopped immediately');
-			this.sendMessage({ 
-				command: 'disconnecting',
-				pendingBytes: 0,
-				pendingChunks: 0,
-				elapsedMs: 0
-			});
-			
-			// STEP 1: Remove listeners FIRST (before anything else) to stop callbacks
-			console.log('FancyMon: Step 1 - Removing ALL event listeners immediately...');
-			try {
-				// Remove listeners using both methods to be absolutely sure
-				portToClose.removeAllListeners('data');
-				portToClose.removeAllListeners('error');
-				portToClose.removeAllListeners('close');
-				
-				// Also try individual removal as backup
-				if (this.dataHandler) {
-					portToClose.off('data', this.dataHandler);
-				}
-				if (this.errorHandler) {
-					portToClose.off('error', this.errorHandler);
-				}
-				if (this.closeHandler) {
-					portToClose.off('close', this.closeHandler);
-				}
-				console.log('FancyMon: All event listeners removed');
-			} catch (removeErr: any) {
-				console.log('FancyMon: Error removing listeners:', removeErr?.message);
-			}
-			
-			// STEP 2: Clear references IMMEDIATELY so data handler checks fail
-			this.dataHandler = null;
-			this.errorHandler = null;
-			this.closeHandler = null;
-			this.port = null; // Clear this BEFORE pausing so data handler checks fail
-			console.log('FancyMon: All references cleared');
-			
-			// STEP 3: Try to pause/stop the port (but listeners are already gone)
-			try {
-				if (portToClose.isOpen) {
-					if (portToClose.pause) {
-						portToClose.pause();
-						console.log('FancyMon: Port paused');
-					}
-				}
-			} catch (pauseErr: any) {
-				console.log('FancyMon: Error pausing port:', pauseErr?.message);
-			}
-			
-			// STEP 4: Destroy/close the port immediately - don't wait for graceful close
-			try {
-				if (portToClose.isOpen) {
-					console.log('FancyMon: Step 4 - Destroying port immediately...');
-					// Try destroy first (more aggressive, stops everything immediately)
-					try {
-						if (portToClose.destroy) {
-							portToClose.destroy();
-							console.log('FancyMon: Port destroyed immediately');
-						}
-					} catch (destroyErr: any) {
-						console.log('FancyMon: Error destroying port:', destroyErr?.message);
-					}
-					
-					// Also try close with very short timeout (100ms max)
-					try {
-						await Promise.race([
-							portToClose.close(),
-							new Promise((_, reject) => setTimeout(() => reject(new Error('Close timeout')), 100))
-						]);
-						console.log('FancyMon: Port closed');
-					} catch (closeErr: any) {
-						// Ignore close errors - we already tried destroy
-						console.log('FancyMon: Port close skipped (destroy was attempted):', closeErr?.message);
-					}
-				} else {
-					console.log('FancyMon: Port was already closed');
-				}
-			} catch (err: any) {
-				console.error('FancyMon: Error during port cleanup:', err);
-			}
-			
-			// Port reference already cleared above, just finalize disconnect
-			console.log('FancyMon: Disconnect complete');
-			this.sendMessage({ command: 'disconnected' });
-			this.isDisconnecting = false;
-		} else {
-			this.shouldProcessData = false;
-			this.isConnected = false;
-			this.sendMessage({ command: 'disconnected' });
-		}
-	}
-
-	private async sendData(data: string): Promise<void> {
-		if (!this.port || !this.isConnected) {
-			this.sendMessage({
-				command: 'error',
-				message: 'Not connected to serial port'
-			});
-			return;
-		}
-
-		try {
-			await this.port.write(data);
-			// Echo sent data to monitor
-			this.sendMessage({
-				command: 'data',
-				data: `[SENT] ${data}`
-			});
-		} catch (error: any) {
-			this.sendMessage({
-				command: 'error',
-				message: `Send error: ${error?.message || error}`
-			});
-		}
+		await this.connection.disconnect();
 	}
 
 	private async saveToFile(content: string): Promise<void> {
