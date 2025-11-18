@@ -288,12 +288,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			</select>
 		</div>
 
+		<button id="sendResetBtn" disabled>Send Reset</button>
 		<button id="connectBtn" class="success">Connect</button>
 		<button id="disconnectBtn" class="danger" disabled>Disconnect</button>
-		<button id="clearBtn">Clear</button>
 	</div>
 
 	<div class="controls-row">
+		<button id="clearBtn">Clear</button>
 		<div class="control-group">
 			<label>Max Lines:</label>
 			<input type="number" id="maxLines" value="10000" min="100" max="1000000" style="width: 100px;">
@@ -303,6 +304,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			<span id="lineUsage" style="color: var(--vscode-descriptionForeground); font-size: 12px;">0% (0 / 10000)</span>
 		</div>
 		<button id="saveBtn">Save to File</button>
+		<button id="copyAllBtn">Copy All</button>
+		<button id="copyFilteredBtn">Copy All Filtered</button>
+		<button id="copyVisibleBtn">Copy All Visible</button>
 	</div>
 
 	<div class="controls-row">
@@ -378,6 +382,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const dataBits = document.getElementById('dataBits');
 		const stopBits = document.getElementById('stopBits');
 		const parity = document.getElementById('parity');
+		const sendResetBtn = document.getElementById('sendResetBtn');
 		const connectBtn = document.getElementById('connectBtn');
 		const disconnectBtn = document.getElementById('disconnectBtn');
 		const clearBtn = document.getElementById('clearBtn');
@@ -388,6 +393,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const maxLinesInput = document.getElementById('maxLines');
 		const lineUsage = document.getElementById('lineUsage');
 		const saveBtn = document.getElementById('saveBtn');
+		const copyAllBtn = document.getElementById('copyAllBtn');
+		const copyFilteredBtn = document.getElementById('copyFilteredBtn');
+		const copyVisibleBtn = document.getElementById('copyVisibleBtn');
 		const scrollbarIndicator = document.getElementById('scrollbarIndicator');
 		const filterInput = document.getElementById('filterInput');
 		
@@ -438,6 +446,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			parity.disabled = isConnected || isDisconnecting;
 			connectBtn.disabled = isConnected || isDisconnecting || !portSelect.value;
 			disconnectBtn.disabled = !isConnected || isDisconnecting;
+			sendResetBtn.disabled = !isConnected || isDisconnecting;
 			sendInput.disabled = !isConnected || isDisconnecting;
 			sendBtn.disabled = !isConnected || isDisconnecting;
 			refreshPorts.disabled = isConnected || isDisconnecting;
@@ -724,8 +733,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let lineBuffer = '';
 		
 		function appendData(data) {
+			// Allow disconnect/connect status messages through even when disconnecting
+			// These are important status messages that should be stored
+			const isStatusMessage = data && (
+				data.includes('[[ DISCONNECTED ]]') ||
+				data.includes('[[ CONNECTED ]]') ||
+				data.includes('[[ RESET SENT TO DEVICE ]]')
+			);
+			
 			// CRITICAL: Exit immediately if disconnecting - don't process any data
-			if (isDisconnecting) {
+			// EXCEPT for status messages which should always be stored
+			if (isDisconnecting && !isStatusMessage) {
 				return; // Exit silently, don't process data during disconnect
 			}
 			
@@ -1017,6 +1035,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 		});
 
+		sendResetBtn.addEventListener('click', () => {
+			vscode.postMessage({ command: 'sendReset' });
+		});
+
 		disconnectBtn.addEventListener('click', () => {
 			if (isDisconnecting) {
 				return; // Prevent multiple clicks
@@ -1095,6 +1117,145 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 			vscode.postMessage({ command: 'save', content: content });
+		});
+
+		// Copy functions
+		function copyToClipboard(text) {
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(text).then(() => {
+					console.log('FancyMon: Copied to clipboard');
+				}).catch(err => {
+					console.error('FancyMon: Failed to copy:', err);
+					vscode.postMessage({ command: 'error', message: 'Failed to copy to clipboard' });
+				});
+			} else {
+				// Fallback for older browsers
+				const textArea = document.createElement('textarea');
+				textArea.value = text;
+				textArea.style.position = 'fixed';
+				textArea.style.opacity = '0';
+				document.body.appendChild(textArea);
+				textArea.select();
+				try {
+					document.execCommand('copy');
+					console.log('FancyMon: Copied to clipboard (fallback)');
+				} catch (err) {
+					console.error('FancyMon: Failed to copy:', err);
+					vscode.postMessage({ command: 'error', message: 'Failed to copy to clipboard' });
+				}
+				document.body.removeChild(textArea);
+			}
+		}
+
+		copyAllBtn.addEventListener('click', () => {
+			// Copy all raw lines (remove ANSI codes)
+			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
+			const ansiRegex = new RegExp(pattern, 'g');
+			const content = (rawLines.join('') + lineBuffer).replace(ansiRegex, '');
+			
+			if (content.trim().length === 0) {
+				vscode.postMessage({ command: 'error', message: 'No data to copy' });
+				return;
+			}
+			copyToClipboard(content);
+		});
+
+		copyFilteredBtn.addEventListener('click', () => {
+			// Copy all filtered lines (remove ANSI codes)
+			if (!filterPattern || filterPattern.trim() === '') {
+				vscode.postMessage({ command: 'error', message: 'No filter pattern set' });
+				return;
+			}
+			
+			// Build line entries from raw lines
+			let lineEntries = rawLines.map((line, idx) => ({
+				text: line,
+				lineNumber: totalTrimmedLines + idx + 1,
+				isBuffer: false
+			}));
+			
+			// Add incomplete buffer line if it exists
+			if (lineBuffer) {
+				lineEntries = [...lineEntries, { text: lineBuffer, lineNumber: null, isBuffer: true }];
+			}
+			
+			// Apply filter
+			const filteredEntries = applyFilter(lineEntries, filterPattern);
+			
+			// Strip ANSI codes and join
+			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
+			const ansiRegex = new RegExp(pattern, 'g');
+			const content = filteredEntries.map(entry => stripAnsiCodes(entry.text)).join('');
+			
+			if (content.trim().length === 0) {
+				vscode.postMessage({ command: 'error', message: 'No filtered data to copy' });
+				return;
+			}
+			copyToClipboard(content);
+		});
+
+		copyVisibleBtn.addEventListener('click', () => {
+			// Copy only visible lines in the viewport
+			if (!monitor) {
+				vscode.postMessage({ command: 'error', message: 'Monitor element not found' });
+				return;
+			}
+			
+			const scrollTop = monitor.scrollTop;
+			const clientHeight = monitor.clientHeight;
+			const viewportTop = scrollTop;
+			const viewportBottom = scrollTop + clientHeight;
+			
+			// Get all line elements
+			const lineElements = monitor.querySelectorAll('.line[data-line]');
+			const visibleLines = [];
+			
+			for (const el of lineElements) {
+				if (!(el instanceof HTMLElement)) continue;
+				const top = el.offsetTop;
+				const bottom = top + el.offsetHeight;
+				
+				// Check if line is visible (overlaps with viewport)
+				if (bottom > viewportTop && top < viewportBottom) {
+					const lineAttr = el.getAttribute('data-line');
+					if (lineAttr) {
+						const lineNumber = parseInt(lineAttr, 10);
+						// Get the raw text for this line
+						if (lineNumber > totalTrimmedLines) {
+							const idx = lineNumber - totalTrimmedLines - 1;
+							if (idx >= 0 && idx < rawLines.length) {
+								visibleLines.push(rawLines[idx]);
+							}
+						}
+					}
+				}
+			}
+			
+			// Also check buffer line if visible
+			const bufferLine = monitor.querySelector('.line-buffer');
+			if (bufferLine instanceof HTMLElement) {
+				const top = bufferLine.offsetTop;
+				const bottom = top + bufferLine.offsetHeight;
+				if (bottom > viewportTop && top < viewportBottom && lineBuffer) {
+					visibleLines.push(lineBuffer);
+				}
+			}
+			
+			if (visibleLines.length === 0) {
+				vscode.postMessage({ command: 'error', message: 'No visible data to copy' });
+				return;
+			}
+			
+			// Strip ANSI codes and join
+			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
+			const ansiRegex = new RegExp(pattern, 'g');
+			const content = visibleLines.join('').replace(ansiRegex, '');
+			
+			if (content.trim().length === 0) {
+				vscode.postMessage({ command: 'error', message: 'No visible data to copy' });
+				return;
+			}
+			copyToClipboard(content);
 		});
 
 		sendBtn.addEventListener('click', () => {
@@ -1249,8 +1410,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 					break;
 					
 				case 'data':
-					// Double-check we're not disconnecting before processing
-					if (!isDisconnecting) {
+					// Allow disconnect/connect status messages through even when disconnecting
+					// These are important status messages that should be stored
+					const isStatusMessage = message.data && (
+						message.data.includes('[[ DISCONNECTED ]]') ||
+						message.data.includes('[[ CONNECTED ]]') ||
+						message.data.includes('[[ RESET SENT TO DEVICE ]]')
+					);
+					
+					// Process data if not disconnecting, OR if it's a status message
+					if (!isDisconnecting || isStatusMessage) {
 						appendData(message.data);
 					} else {
 						console.log('FancyMon: Ignoring data - disconnecting');

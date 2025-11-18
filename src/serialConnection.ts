@@ -31,6 +31,20 @@ export class SerialConnection {
 
 	constructor(private callbacks: SerialConnectionCallbacks) {}
 
+	private formatTimestamp(): string {
+		const now = new Date();
+		const hours = String(now.getHours()).padStart(2, '0');
+		const minutes = String(now.getMinutes()).padStart(2, '0');
+		const seconds = String(now.getSeconds()).padStart(2, '0');
+		const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+		return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+	}
+
+	private sendStatusMessage(message: string): void {
+		const timestamp = this.formatTimestamp();
+		this.callbacks.onData(`[${timestamp}] ${message}\n`);
+	}
+
 	private async getSerialPort(): Promise<typeof import('serialport')> {
 		if (!this.serialportModule) {
 			try {
@@ -88,12 +102,14 @@ export class SerialConnection {
 			};
 
 			this.errorHandler = (err: any) => {
+				console.error('FancyMon: Serial port error:', err);
 				if (this.isConnected) { // Only process errors if still connected
 					this.callbacks.onError(`Serial port error: ${err?.message || err}`);
 				}
 			};
 
 			this.closeHandler = () => {
+				console.log('FancyMon: Port closed');
 				this.isConnected = false;
 				this.callbacks.onDisconnected();
 			};
@@ -104,8 +120,10 @@ export class SerialConnection {
 
 			// Open the port (promise-based in v11)
 			await this.port.open();
+			console.log('FancyMon: Port opened successfully');
 			
 			this.isConnected = true;
+			this.sendStatusMessage('[[ CONNECTED ]]');
 			this.callbacks.onConnected();
 		} catch (error: any) {
 			this.callbacks.onError(`Connection error: ${error?.message || error}`);
@@ -124,6 +142,10 @@ export class SerialConnection {
 		}
 		
 		if (this.port) {
+			// Send disconnect message FIRST, before any flags are set that would block it
+			// This must happen before onDisconnecting() which sets isDisconnecting in the webview
+			this.sendStatusMessage('[[ DISCONNECTED ]]');
+			
 			this.isDisconnecting = true;
 			this.disconnectStartTime = Date.now();
 			this.pendingDataBytes = 0;
@@ -222,6 +244,7 @@ export class SerialConnection {
 		} else {
 			this.shouldProcessData = false;
 			this.isConnected = false;
+			this.sendStatusMessage('[[ DISCONNECTED ]]');
 			this.callbacks.onDisconnected();
 		}
 	}
@@ -238,6 +261,38 @@ export class SerialConnection {
 			this.callbacks.onData(`[SENT] ${data}`);
 		} catch (error: any) {
 			this.callbacks.onError(`Send error: ${error?.message || error}`);
+		}
+	}
+
+	async toggleDTRReset(): Promise<void> {
+		if (!this.port || !this.isConnected) {
+			this.callbacks.onError('Not connected to serial port');
+			return;
+		}
+
+		try {
+			// Your circuit has RTS connected to RESET (via NPN transistor with inverted logic)
+			// RTS HIGH → Transistor ON → RESET LOW (device in reset)
+			// RTS LOW → Transistor OFF → RESET HIGH (device running)
+			
+			console.log('FancyMon: Sending reset pulse');
+			
+			// Ensure RTS starts LOW (device running)
+			await this.port.set({ rts: false, dtr: false });
+			await new Promise(resolve => setTimeout(resolve, 100));
+			
+			// Pull RTS HIGH to trigger reset
+			await this.port.set({ rts: true, dtr: false });
+			await new Promise(resolve => setTimeout(resolve, 100));
+			
+			// Release RTS LOW to exit reset
+			await this.port.set({ rts: false, dtr: false });
+			
+			console.log('FancyMon: Reset pulse sent');
+			this.sendStatusMessage('[[ RESET SENT TO DEVICE ]]');
+		} catch (error: any) {
+			console.error('FancyMon: Reset error:', error);
+			this.callbacks.onError(`Reset error: ${error?.message || error}`);
 		}
 	}
 

@@ -138,6 +138,9 @@ export class SerialMonitor {
 					case 'send':
 						await this.connection.sendData(message.data);
 						break;
+					case 'sendReset':
+						await this.connection.toggleDTRReset();
+						break;
 					case 'clear':
 						this.sendMessage({ command: 'clear' });
 						break;
