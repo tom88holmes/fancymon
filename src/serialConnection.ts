@@ -119,17 +119,31 @@ export class SerialConnection {
 			await this.port.open();
 			console.log('FancyMon: Port opened successfully');
 			
-			// Explicitly set RTS and DTR to false to avoid driving BOOT0/SDA pins
+			// Explicitly set RTS and DTR to false IMMEDIATELY after opening
 			// Some devices share BOOT0 with I2C SDA, so we must not drive these pins
+			// Set them right away, then again after a delay to catch any driver-initiated changes
 			try {
 				await this.port.set({ rts: false, dtr: false });
-				console.log('FancyMon: RTS and DTR set to false (not driven)');
+				console.log('FancyMon: RTS and DTR set to false immediately after open');
 			} catch (error: any) {
-				console.warn('FancyMon: Warning - could not set RTS/DTR:', error?.message || error);
-				// Continue anyway - connection is still valid
+				console.warn('FancyMon: Warning - could not set RTS/DTR immediately:', error?.message || error);
 			}
 			
 			this.isConnected = true;
+			
+			// Set again after a delay to ensure they stay false (some drivers may reset them)
+			// Use the same timing as the reset function to ensure it works correctly
+			try {
+				await new Promise(resolve => setTimeout(resolve, 100));
+				await this.port.set({ rts: false, dtr: false });
+				await new Promise(resolve => setTimeout(resolve, 50));
+				await this.port.set({ rts: false, dtr: false }); // Set again to ensure it sticks
+				console.log('FancyMon: RTS and DTR confirmed false after delay');
+			} catch (error: any) {
+				console.warn('FancyMon: Warning - could not set RTS/DTR after delay:', error?.message || error);
+				// Continue anyway - connection is still valid
+			}
+			
 			this.sendStatusMessage('[[ CONNECTED ]]');
 			this.callbacks.onConnected();
 		} catch (error: any) {
@@ -321,4 +335,5 @@ export class SerialConnection {
 		}));
 	}
 }
+
 
