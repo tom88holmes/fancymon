@@ -10,6 +10,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Serial Monitor</title>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 	<style>
 		* {
 			box-sizing: border-box;
@@ -234,9 +235,193 @@ export function getWebviewContentHtml(cspSource: string): string {
 		.status.error {
 			color: var(--vscode-errorForeground);
 		}
+
+		/* Tabs styling */
+		.tabs {
+			display: flex;
+			gap: 5px;
+			margin-bottom: 10px;
+			border-bottom: 1px solid var(--vscode-panel-border);
+		}
+
+		.tab {
+			background-color: transparent;
+			color: var(--vscode-descriptionForeground);
+			border: none;
+			border-bottom: 2px solid transparent;
+			padding: 8px 16px;
+			cursor: pointer;
+			font-size: 13px;
+			transition: all 0.2s;
+		}
+
+		.tab:hover {
+			color: var(--vscode-foreground);
+			background-color: var(--vscode-list-hoverBackground);
+		}
+
+		.tab.active {
+			color: var(--vscode-foreground);
+			border-bottom-color: var(--vscode-textLink-foreground);
+		}
+
+		.tab-content {
+			display: none;
+			flex: 1 1 auto;
+			min-height: 0;
+			flex-direction: column;
+		}
+
+		.tab-content.active {
+			display: flex;
+		}
+
+		.line {
+			position: relative;
+		}
+
+		.line:hover .add-to-plot-btn {
+			opacity: 1;
+		}
+
+		.add-to-plot-btn {
+			position: absolute;
+			right: 5px;
+			top: 2px;
+			opacity: 0;
+			transition: opacity 0.2s;
+			background-color: var(--vscode-button-background);
+			color: var(--vscode-button-foreground);
+			border: none;
+			padding: 2px 6px;
+			font-size: 10px;
+			cursor: pointer;
+			border-radius: 2px;
+			z-index: 10;
+		}
+
+		.add-to-plot-btn:hover {
+			background-color: var(--vscode-button-hoverBackground);
+		}
+
+		/* Plot view styling */
+		.plot-controls {
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+			margin-bottom: 10px;
+			padding: 10px;
+			background-color: var(--vscode-textCodeBlock-background);
+			border: 1px solid var(--vscode-panel-border);
+			border-radius: 2px;
+		}
+
+		.plot-control-row {
+			display: flex;
+			gap: 10px;
+			align-items: center;
+			flex-wrap: wrap;
+		}
+
+		.plot-control-row label {
+			min-width: 100px;
+			font-size: 12px;
+		}
+
+		.plot-control-row input[type="text"] {
+			flex: 1;
+			min-width: 200px;
+		}
+
+		.extraction-preview {
+			padding: 5px 10px;
+			background-color: var(--vscode-input-background);
+			border: 1px solid var(--vscode-input-border);
+			border-radius: 2px;
+			font-family: monospace;
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+			min-height: 20px;
+		}
+
+		.extraction-preview.has-numbers {
+			color: var(--vscode-textLink-foreground);
+		}
+
+		.number-selector {
+			display: flex;
+			gap: 10px;
+			flex-wrap: wrap;
+			margin-top: 5px;
+		}
+
+		.number-checkbox {
+			display: flex;
+			align-items: center;
+			gap: 5px;
+		}
+
+		.number-checkbox input[type="checkbox"] {
+			width: auto;
+		}
+
+		.variables-list {
+			display: flex;
+			flex-direction: column;
+			gap: 5px;
+			margin-top: 10px;
+		}
+
+		.variable-item {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			padding: 5px 10px;
+			background-color: var(--vscode-input-background);
+			border: 1px solid var(--vscode-input-border);
+			border-radius: 2px;
+		}
+
+		.variable-item .variable-name {
+			font-weight: bold;
+			min-width: 150px;
+		}
+
+		.variable-item .variable-pattern {
+			flex: 1;
+			font-family: monospace;
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+		}
+
+		.variable-item .variable-count {
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+			min-width: 80px;
+		}
+
+		.plot-container {
+			flex: 1 1 auto;
+			min-height: 0;
+			position: relative;
+			background-color: var(--vscode-textCodeBlock-background);
+			border: 1px solid var(--vscode-panel-border);
+			border-radius: 2px;
+		}
+
+		#plotCanvas {
+			width: 100%;
+			height: 100%;
+		}
 	</style>
 </head>
 <body>
+	<div class="tabs">
+		<button class="tab active" data-tab="monitor">Monitor</button>
+		<button class="tab" data-tab="plot">Plot</button>
+	</div>
+
+	<div class="tab-content active" id="monitorTab">
 	<div class="controls">
 		<div class="control-group">
 			<label>Port:</label>
@@ -326,6 +511,40 @@ export function getWebviewContentHtml(cspSource: string): string {
 	</div>
 
 	<div class="status" id="status">Disconnected</div>
+	</div>
+
+	<div class="tab-content" id="plotTab">
+		<div class="plot-controls">
+			<div class="plot-control-row">
+				<label>Time Pattern (X-axis):</label>
+				<input type="text" id="timePatternInput" placeholder="Regex pattern for time value (e.g., \\(([0-9]+)\\))" value="\\(([0-9]+)\\)">
+				<span style="font-size: 11px; color: var(--vscode-descriptionForeground);">Extracts uptime from parentheses</span>
+			</div>
+			<div class="plot-control-row">
+				<label>Pattern Input:</label>
+				<input type="text" id="patternInput" placeholder="Enter or paste line text here...">
+			</div>
+			<div class="plot-control-row">
+				<label>Extracted Numbers:</label>
+				<div class="extraction-preview" id="extractionPreview">No numbers found</div>
+			</div>
+			<div class="plot-control-row">
+				<label>Select Numbers:</label>
+				<div class="number-selector" id="numberSelector"></div>
+			</div>
+			<div class="plot-control-row">
+				<button id="addVariableBtn" disabled>Add Variable to Plot</button>
+				<button id="clearPlotBtn">Clear Plot</button>
+				<button id="pausePlotBtn">Pause</button>
+			</div>
+			<div class="variables-list" id="variablesList">
+				<div style="font-size: 12px; color: var(--vscode-descriptionForeground); padding: 5px;">No variables added yet</div>
+			</div>
+		</div>
+		<div class="plot-container">
+			<canvas id="plotCanvas"></canvas>
+		</div>
+	</div>
 
 	<script>
 		// Use DOMContentLoaded to ensure DOM is ready
@@ -411,6 +630,532 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let rawLines = [];
 		let filterPattern = ''; // Filter pattern for dynamic filtering
 		const newlineChar = String.fromCharCode(10);
+
+		// Plotting variables
+		const tabs = document.querySelectorAll('.tab');
+		const monitorTab = document.getElementById('monitorTab');
+		const plotTab = document.getElementById('plotTab');
+		const patternInput = document.getElementById('patternInput');
+		const extractionPreview = document.getElementById('extractionPreview');
+		const numberSelector = document.getElementById('numberSelector');
+		const addVariableBtn = document.getElementById('addVariableBtn');
+		const clearPlotBtn = document.getElementById('clearPlotBtn');
+		const pausePlotBtn = document.getElementById('pausePlotBtn');
+		const variablesList = document.getElementById('variablesList');
+		const timePatternInput = document.getElementById('timePatternInput');
+		const plotCanvas = document.getElementById('plotCanvas');
+		
+		let plotVariables = []; // Array of {id, name, pattern, regex, data: [{time, value}], color}
+		let plotChart = null;
+		let isPlotPaused = false;
+		let currentActiveTab = 'monitor';
+		let selectedNumbers = new Set(); // Track which number indices are selected
+		let extractedNumbers = []; // Current extracted numbers from pattern input
+
+		// Tab switching
+		tabs.forEach(tab => {
+			tab.addEventListener('click', () => {
+				const targetTab = tab.getAttribute('data-tab');
+				tabs.forEach(t => t.classList.remove('active'));
+				tab.classList.add('active');
+				
+				monitorTab.classList.remove('active');
+				plotTab.classList.remove('active');
+				
+				if (targetTab === 'monitor') {
+					monitorTab.classList.add('active');
+					currentActiveTab = 'monitor';
+				} else {
+					plotTab.classList.add('active');
+					currentActiveTab = 'plot';
+					// Initialize chart if not already done
+					if (!plotChart && plotCanvas && typeof Chart !== 'undefined') {
+						setTimeout(() => {
+							initializeChart();
+						}, 100);
+					} else if (plotChart) {
+						// Resize chart when switching to plot tab
+						setTimeout(() => {
+							plotChart.resize();
+						}, 100);
+					}
+				}
+			});
+		});
+
+		// Initialize Chart.js
+		function initializeChart() {
+			if (!plotCanvas || typeof Chart === 'undefined') {
+				console.error('Chart.js not loaded or canvas not found');
+				return;
+			}
+
+			const ctx = plotCanvas.getContext('2d');
+			plotChart = new Chart(ctx, {
+				type: 'line',
+				data: {
+					datasets: []
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					interaction: {
+						mode: 'index',
+						intersect: false,
+					},
+					scales: {
+						x: {
+							type: 'linear',
+							position: 'bottom',
+							title: {
+								display: true,
+								text: 'Time (uptime)'
+							}
+						},
+						y: {
+							title: {
+								display: true,
+								text: 'Value'
+							}
+						}
+					},
+					plugins: {
+						legend: {
+							display: true,
+							position: 'top'
+						},
+						tooltip: {
+							enabled: true
+						}
+					},
+					animation: false // Disable animation for better performance with live data
+				}
+			});
+
+			// Handle canvas resize
+			const resizeObserver = new ResizeObserver(() => {
+				if (plotChart) {
+					plotChart.resize();
+				}
+			});
+			resizeObserver.observe(plotCanvas);
+			
+			// Also restore existing datasets if any
+			plotVariables.forEach((variable, index) => {
+				if (plotChart.data.datasets[index]) {
+					plotChart.data.datasets[index].data = variable.data.map(d => ({ x: d.time, y: d.value }));
+				}
+			});
+			plotChart.update('none');
+		}
+
+		// Extract numbers from text
+		function extractNumbers(text) {
+			// Remove ANSI codes first
+			const plainText = stripAnsiCodes(text);
+			// Match numbers (integers and decimals) - use RegExp constructor to avoid template literal issues
+			const numberRegex = new RegExp('(-?\\\\d+\\\\.?\\\\d*)', 'g');
+			const matches = [];
+			let match;
+			while ((match = numberRegex.exec(plainText)) !== null) {
+				matches.push({
+					index: matches.length + 1,
+					value: parseFloat(match[1]),
+					text: match[1],
+					position: match.index
+				});
+			}
+			return matches;
+		}
+
+		// Generate regex pattern for a specific number index
+		function generatePatternForNumber(text, numberIndex) {
+			const numbers = extractNumbers(text);
+			if (numberIndex < 1 || numberIndex > numbers.length) {
+				return null;
+			}
+
+			const targetNumber = numbers[numberIndex - 1];
+			const targetStart = targetNumber.position;
+			const targetEnd = targetNumber.position + targetNumber.text.length;
+			
+			// Escape special regex characters (but preserve the number position)
+			// Escape characters one by one to avoid template literal parsing issues
+			function escapeRegexChars(str) {
+				let result = '';
+				for (let i = 0; i < str.length; i++) {
+					const char = str[i];
+					if (char === '\\\\' || char === '.' || char === '*' || char === '+' || char === '?' || 
+						char === '^' || char === '$' || char === '{' || char === '}' || 
+						char === '(' || char === ')' || char === '[' || char === ']' || char === '|') {
+						result += '\\\\' + char;
+					} else {
+						result += char;
+					}
+				}
+				return result;
+			}
+			
+			// Build pattern by processing text character by character
+			// Replace all numbers except the target with generic number patterns
+			let pattern = '';
+			let pos = 0;
+			
+			// Sort numbers by position
+			const sortedNumbers = [...numbers].sort((a, b) => a.position - b.position);
+			
+			for (const num of sortedNumbers) {
+				// Add text before this number
+				if (num.position > pos) {
+					const textBefore = text.substring(pos, num.position);
+					pattern += escapeRegexChars(textBefore);
+				}
+				
+				// Add pattern for this number
+				if (num === targetNumber) {
+					// Target number: use capture group
+					pattern += '(-?\\\\d+\\\\.?\\\\d*)';
+				} else {
+					// Other numbers: use generic number pattern (allow any number)
+					// Check if it's a decimal number
+					if (num.text.includes('.')) {
+						pattern += '-?\\\\d+\\\\.?\\\\d*';
+					} else {
+						pattern += '-?\\\\d+';
+					}
+				}
+				
+				pos = num.position + num.text.length;
+			}
+			
+			// Add remaining text after last number
+			if (pos < text.length) {
+				const textAfter = text.substring(pos);
+				pattern += escapeRegexChars(textAfter);
+			}
+			
+			return pattern;
+		}
+
+		// Extract variable name from pattern (non-number text before the number)
+		function extractVariableName(text, numberIndex) {
+			const numbers = extractNumbers(text);
+			if (numberIndex < 1 || numberIndex > numbers.length) {
+				return 'variable' + numberIndex;
+			}
+
+			const targetNumber = numbers[numberIndex - 1];
+			const beforeNumber = text.substring(0, targetNumber.position).trim();
+			// Extract last word or meaningful text before the number
+			const words = beforeNumber.split(/[\\s\\W]+/).filter(w => w.length > 0);
+			if (words.length > 0) {
+				const lastWord = words[words.length - 1];
+				// Clean up the word
+				const cleanWord = lastWord.replace(/[^a-zA-Z0-9]/g, '');
+				if (cleanWord.length > 0) {
+					return cleanWord + ':' + numberIndex;
+				}
+			}
+			return 'value' + numberIndex;
+		}
+
+		// Update extraction preview
+		function updateExtractionPreview() {
+			if (!patternInput || !extractionPreview) return;
+			
+			const text = patternInput.value;
+			const plainText = stripAnsiCodes(text);
+			let allNumbers = extractNumbers(text);
+			
+			// Extract time value and find its position if time pattern is set
+			let timeValue = null;
+			let timeMatchEnd = 0; // Position after time match
+			if (timePatternInput && timePatternInput.value) {
+				try {
+					const timePattern = timePatternInput.value.trim();
+					if (timePattern) {
+						const regex = new RegExp(timePattern);
+						const match = regex.exec(plainText);
+						if (match) {
+							if (match[1]) {
+								timeValue = parseFloat(match[1]);
+							}
+							// Get the end position of the entire match (not just capture group)
+							timeMatchEnd = match.index + match[0].length;
+						}
+					}
+				} catch (e) {
+					// Ignore errors
+				}
+			}
+			
+			// Filter out numbers that come before the time pattern match
+			if (timeMatchEnd > 0) {
+				extractedNumbers = allNumbers.filter(num => num.position >= timeMatchEnd);
+				// Re-index starting from 1, but keep original index for pattern generation
+				extractedNumbers = extractedNumbers.map((num, idx) => ({
+					...num,
+					index: idx + 1,
+					originalIndex: num.index // Keep original index for pattern generation
+				}));
+			} else {
+				extractedNumbers = allNumbers;
+			}
+			
+			if (extractedNumbers.length === 0) {
+				if (timeValue !== null) {
+					extractionPreview.textContent = 'Time: ' + timeValue + ' (no numbers found after time)';
+				} else {
+					extractionPreview.textContent = 'No numbers found';
+				}
+				extractionPreview.classList.remove('has-numbers');
+				numberSelector.innerHTML = '';
+				addVariableBtn.disabled = true;
+				selectedNumbers.clear();
+			} else {
+				let preview = extractedNumbers.map(n => n.index + ': ' + n.text).join(', ');
+				if (timeValue !== null) {
+					preview = 'Time: ' + timeValue + ' | Numbers: ' + preview;
+				}
+				extractionPreview.textContent = preview;
+				extractionPreview.classList.add('has-numbers');
+				
+				// Update number selector checkboxes
+				numberSelector.innerHTML = '';
+				extractedNumbers.forEach(num => {
+					const checkboxDiv = document.createElement('div');
+					checkboxDiv.className = 'number-checkbox';
+					const checkbox = document.createElement('input');
+					checkbox.type = 'checkbox';
+					checkbox.id = 'num-' + num.index;
+					checkbox.value = num.index;
+					checkbox.addEventListener('change', () => {
+						if (checkbox.checked) {
+							selectedNumbers.add(num.index);
+						} else {
+							selectedNumbers.delete(num.index);
+						}
+						addVariableBtn.disabled = selectedNumbers.size === 0;
+					});
+					const label = document.createElement('label');
+					label.htmlFor = 'num-' + num.index;
+					label.textContent = num.index + ': ' + num.text;
+					checkboxDiv.appendChild(checkbox);
+					checkboxDiv.appendChild(label);
+					numberSelector.appendChild(checkboxDiv);
+				});
+			}
+		}
+
+		// Add variable to plot
+		function addVariableToPlot() {
+			if (!patternInput || selectedNumbers.size === 0) return;
+
+			const text = patternInput.value.trim();
+			if (!text) return;
+
+			selectedNumbers.forEach(numIndex => {
+				// Find the original index if numbers were filtered
+				const numObj = extractedNumbers.find(n => n.index === numIndex);
+				const originalIndex = numObj && numObj.originalIndex ? numObj.originalIndex : numIndex;
+				const pattern = generatePatternForNumber(text, originalIndex);
+				if (!pattern) return;
+
+				const name = extractVariableName(text, originalIndex);
+				const color = getNextColor(plotVariables.length);
+				
+				const variable = {
+					id: Date.now() + '-' + numIndex,
+					name: name,
+					pattern: pattern,
+					regex: new RegExp(pattern),
+					data: [],
+					color: color
+				};
+
+				plotVariables.push(variable);
+				
+				// Add dataset to chart
+				if (plotChart) {
+					plotChart.data.datasets.push({
+						label: variable.name,
+						data: [],
+						borderColor: color,
+						backgroundColor: color + '40',
+						fill: false,
+						tension: 0.1
+					});
+					plotChart.update('none');
+				}
+			});
+
+			updateVariablesList();
+			// Clear selection
+			selectedNumbers.clear();
+			patternInput.value = '';
+			updateExtractionPreview();
+		}
+
+		// Get next color for variable
+		function getNextColor(index) {
+			const colors = [
+				'rgb(54, 162, 235)',   // Blue
+				'rgb(255, 99, 132)',   // Red
+				'rgb(75, 192, 192)',   // Teal
+				'rgb(255, 159, 64)',   // Orange
+				'rgb(153, 102, 255)',  // Purple
+				'rgb(255, 205, 86)',   // Yellow
+				'rgb(201, 203, 207)',  // Grey
+				'rgb(255, 99, 255)'    // Magenta
+			];
+			return colors[index % colors.length];
+		}
+
+		// Update variables list UI
+		function updateVariablesList() {
+			if (!variablesList) return;
+
+			if (plotVariables.length === 0) {
+				variablesList.innerHTML = '<div style="font-size: 12px; color: var(--vscode-descriptionForeground); padding: 5px;">No variables added yet</div>';
+				return;
+			}
+
+			variablesList.innerHTML = '';
+			plotVariables.forEach(variable => {
+				const item = document.createElement('div');
+				item.className = 'variable-item';
+				
+				const nameSpan = document.createElement('span');
+				nameSpan.className = 'variable-name';
+				nameSpan.textContent = variable.name;
+				nameSpan.style.color = variable.color;
+				
+				const patternSpan = document.createElement('span');
+				patternSpan.className = 'variable-pattern';
+				patternSpan.textContent = variable.pattern;
+				
+				const countSpan = document.createElement('span');
+				countSpan.className = 'variable-count';
+				countSpan.textContent = variable.data.length + ' points';
+				
+				const removeBtn = document.createElement('button');
+				removeBtn.textContent = 'Remove';
+				removeBtn.style.fontSize = '11px';
+				removeBtn.addEventListener('click', () => {
+					removeVariable(variable.id);
+				});
+				
+				item.appendChild(nameSpan);
+				item.appendChild(patternSpan);
+				item.appendChild(countSpan);
+				item.appendChild(removeBtn);
+				variablesList.appendChild(item);
+			});
+		}
+
+		// Remove variable
+		function removeVariable(variableId) {
+			const index = plotVariables.findIndex(v => v.id === variableId);
+			if (index === -1) return;
+
+			plotVariables.splice(index, 1);
+			
+			if (plotChart) {
+				plotChart.data.datasets.splice(index, 1);
+				plotChart.update();
+			}
+
+			updateVariablesList();
+		}
+
+		// Extract time value from line
+		function extractTimeValue(line) {
+			if (!timePatternInput || !timePatternInput.value) {
+				return null;
+			}
+
+			try {
+				const timePattern = timePatternInput.value.trim();
+				if (!timePattern) return null;
+
+				const regex = new RegExp(timePattern);
+				const match = regex.exec(line);
+				if (match && match[1]) {
+					return parseFloat(match[1]);
+				}
+			} catch (e) {
+				console.error('Error extracting time:', e);
+			}
+			return null;
+		}
+
+		// Process line for plotting
+		function processLineForPlot(line) {
+			if (isPlotPaused || plotVariables.length === 0) return;
+
+			const plainText = stripAnsiCodes(line);
+			const timeValue = extractTimeValue(plainText);
+			if (timeValue === null) return;
+
+			plotVariables.forEach((variable, index) => {
+				try {
+					const match = variable.regex.exec(plainText);
+					if (match && match[1]) {
+						const value = parseFloat(match[1]);
+						if (!isNaN(value)) {
+							variable.data.push({ time: timeValue, value: value });
+							
+							// Limit data points (keep last 1000)
+							if (variable.data.length > 1000) {
+								variable.data.shift();
+							}
+
+							// Update chart
+							if (plotChart && plotChart.data.datasets[index]) {
+								plotChart.data.datasets[index].data = variable.data.map(d => ({ x: d.time, y: d.value }));
+								plotChart.update('none');
+							}
+						}
+					}
+				} catch (e) {
+					console.error('Error processing variable', variable.name, ':', e);
+				}
+			});
+
+			updateVariablesList();
+		}
+
+		// Event listeners for plot controls
+		if (patternInput) {
+			patternInput.addEventListener('input', updateExtractionPreview);
+		}
+
+		if (timePatternInput) {
+			timePatternInput.addEventListener('input', updateExtractionPreview);
+			timePatternInput.addEventListener('change', updateExtractionPreview);
+		}
+
+		if (addVariableBtn) {
+			addVariableBtn.addEventListener('click', addVariableToPlot);
+		}
+
+		if (clearPlotBtn) {
+			clearPlotBtn.addEventListener('click', () => {
+				plotVariables.forEach(v => v.data = []);
+				if (plotChart) {
+					plotChart.data.datasets.forEach(ds => ds.data = []);
+					plotChart.update();
+				}
+				updateVariablesList();
+			});
+		}
+
+		if (pausePlotBtn) {
+			pausePlotBtn.addEventListener('click', () => {
+				isPlotPaused = !isPlotPaused;
+				pausePlotBtn.textContent = isPlotPaused ? 'Resume' : 'Pause';
+			});
+		}
 
 		// Filter functions (inline for browser JavaScript)
 		function stripAnsiCodes(text) {
@@ -768,8 +1513,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Add complete lines to raw storage
 			let linesAdded = lines.length;
 			for (const line of lines) {
-				rawLines.push(line + newlineChar);
+				const completeLine = line + newlineChar;
+				rawLines.push(completeLine);
 				lineCount++;
+				
+				// Process line for plotting
+				if (!isStatusMessage) {
+					processLineForPlot(completeLine);
+				}
 			}
 			
 			// Trim old lines if we exceed max
@@ -887,8 +1638,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			for (const entry of lineEntries) {
 				const textForDisplay = entry.text.endsWith(newlineChar) ? entry.text.slice(0, -1) : entry.text;
 				const result = parseAnsi(textForDisplay, state);
+				const plainText = stripAnsiCodes(textForDisplay);
 				if (entry.lineNumber !== null && entry.lineNumber !== undefined) {
-					html += '<div class="line" data-line="' + entry.lineNumber + '">' + result.html + '</div>';
+					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtml(plainText) + '">' + result.html + '<button class="add-to-plot-btn" data-line-text="' + escapeHtml(plainText) + '">Add to Plot</button></div>';
 				} else {
 					html += '<div class="line line-buffer">' + result.html + '</div>';
 				}
@@ -897,6 +1649,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Update the monitor with rendered HTML
 			monitor.innerHTML = html;
+			
+			// Attach event listeners to "Add to Plot" buttons
+			const addToPlotButtons = monitor.querySelectorAll('.add-to-plot-btn');
+			addToPlotButtons.forEach(btn => {
+				btn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					const lineText = btn.getAttribute('data-line-text');
+					if (lineText && patternInput) {
+						patternInput.value = lineText;
+						updateExtractionPreview();
+						// Switch to plot tab
+						const plotTabBtn = document.querySelector('.tab[data-tab="plot"]');
+						if (plotTabBtn) {
+							plotTabBtn.click();
+						}
+					}
+				});
+			});
 			
 			// Restore scroll position based on follow state
 			if (shouldStickToBottom) {

@@ -94,10 +94,7 @@ export class SerialConnection {
 				const dataSize = data.length;
 				const timestamp = Date.now();
 				
-				console.log(`FancyMon: Data handler called - size: ${dataSize} bytes`);
-				
-				// Process the data
-				console.log(`FancyMon: Sending data to UI - ${dataSize} bytes`);
+				// Process the data (removed verbose logging for performance)
 				this.callbacks.onData(data.toString());
 			};
 
@@ -121,6 +118,16 @@ export class SerialConnection {
 			// Open the port (promise-based in v11)
 			await this.port.open();
 			console.log('FancyMon: Port opened successfully');
+			
+			// Explicitly set RTS and DTR to false to avoid driving BOOT0/SDA pins
+			// Some devices share BOOT0 with I2C SDA, so we must not drive these pins
+			try {
+				await this.port.set({ rts: false, dtr: false });
+				console.log('FancyMon: RTS and DTR set to false (not driven)');
+			} catch (error: any) {
+				console.warn('FancyMon: Warning - could not set RTS/DTR:', error?.message || error);
+				// Continue anyway - connection is still valid
+			}
 			
 			this.isConnected = true;
 			this.sendStatusMessage('[[ CONNECTED ]]');

@@ -278,7 +278,10 @@ export class SerialMonitor {
 
 	private sendMessage(message: any): void {
 		if (this.panel) {
-			console.log('FancyMon: Sending message to webview:', message.command, JSON.stringify(message).substring(0, 100));
+			// Only log non-data messages to reduce console noise
+			if (message.command !== 'data') {
+				console.log('FancyMon: Sending message to webview:', message.command);
+			}
 			this.panel.webview.postMessage(message);
 		} else {
 			console.log('FancyMon: Panel not ready, queuing message:', message.command);
