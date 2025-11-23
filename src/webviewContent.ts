@@ -630,6 +630,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let rawLines = [];
 		let filterPattern = ''; // Filter pattern for dynamic filtering
 		const newlineChar = String.fromCharCode(10);
+		
+		// Performance optimization: track rendering state
+		let lastRenderedLineIndex = -1; // Last line index that was rendered
+		let lastFilterPattern = ''; // Last filter pattern used for rendering
+		let needsFullRender = false; // Flag to force full render (e.g., filter changed, lines trimmed)
 
 		// Plotting variables
 		const tabs = document.querySelectorAll('.tab');
@@ -1097,6 +1102,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const timeValue = extractTimeValue(plainText);
 			if (timeValue === null) return;
 
+			let chartNeedsUpdate = false;
 			plotVariables.forEach((variable, index) => {
 				try {
 					const match = variable.regex.exec(plainText);
@@ -1110,10 +1116,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 								variable.data.shift();
 							}
 
-							// Update chart
+							// Update chart data (but don't update chart yet - batch updates)
 							if (plotChart && plotChart.data.datasets[index]) {
 								plotChart.data.datasets[index].data = variable.data.map(d => ({ x: d.time, y: d.value }));
-								plotChart.update('none');
+								chartNeedsUpdate = true;
 							}
 						}
 					}
@@ -1122,7 +1128,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 			});
 
-			updateVariablesList();
+			// Batch chart update (only once per line, not per variable)
+			if (chartNeedsUpdate && plotChart) {
+				plotChart.update('none');
+			}
+			
+			// Only update variables list occasionally (not every line)
+			// Update every 10 lines or when paused
+			if (isPlotPaused || (plotVariables.length > 0 && plotVariables[0].data.length % 10 === 0)) {
+				updateVariablesList();
+			}
 		}
 
 		// Event listeners for plot controls
@@ -1525,7 +1540,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Trim old lines if we exceed max
 			if (lineCount > maxLines) {
+				const linesTrimmed = rawLines.length - maxLines;
 				trimOldLines();
+				// If lines were trimmed, we need to re-render everything
+				if (linesTrimmed > 0) {
+					needsFullRender = true;
+					lastRenderedLineIndex = -1; // Reset render tracking
+				}
 			}
 			
 			// Update usage whenever new complete lines arrive (or when near limit)
@@ -1576,8 +1597,114 @@ export function getWebviewContentHtml(cspSource: string): string {
 				unfreezeView();
 			}
 			
-			// Re-render all lines (including buffer if it exists)
-			renderLinesWithBuffer();
+			// Optimize: only append new lines if we're following and no filter is active
+			// and we haven't trimmed lines or changed filter
+			if (isFollowing && !filterPattern && !needsFullRender && lastRenderedLineIndex >= 0) {
+				appendNewLinesOnly(linesAdded);
+			} else {
+				// Full render needed (filter active, lines trimmed, or first render)
+				needsFullRender = false;
+				renderLinesWithBuffer();
+			}
+		}
+		
+		// Optimized function to append only new lines (when following and no filter)
+		function appendNewLinesOnly(newLinesCount) {
+			if (!monitor) return;
+			
+			// Remove existing buffer line before appending new complete lines
+			// This prevents duplicates when a partial line completes
+			const existingBuffer = monitor.querySelector('.line-buffer');
+			if (existingBuffer) {
+				existingBuffer.remove();
+			}
+			
+			// Get the lines to append (only new ones)
+			const startIndex = Math.max(0, lastRenderedLineIndex + 1);
+			const endIndex = rawLines.length;
+			
+			if (startIndex >= endIndex) {
+				// No new complete lines, just update buffer line if needed
+				if (lineBuffer) {
+					updateBufferLine();
+				}
+				return;
+			}
+			
+			// Use DocumentFragment for efficient batch DOM updates
+			const fragment = document.createDocumentFragment();
+			let state = currentAnsiState; // Use current ANSI state
+			
+			// Process only new lines
+			for (let idx = startIndex; idx < endIndex; idx++) {
+				const line = rawLines[idx];
+				const textForDisplay = line.endsWith(newlineChar) ? line.slice(0, -1) : line;
+				const result = parseAnsi(textForDisplay, state);
+				const plainText = stripAnsiCodes(textForDisplay);
+				
+				const lineDiv = document.createElement('div');
+				lineDiv.className = 'line';
+				lineDiv.setAttribute('data-line', (totalTrimmedLines + idx + 1).toString());
+				lineDiv.setAttribute('data-text', plainText);
+				lineDiv.innerHTML = result.html;
+				
+				// Add "Add to Plot" button
+				const addBtn = document.createElement('button');
+				addBtn.className = 'add-to-plot-btn';
+				addBtn.setAttribute('data-line-text', plainText);
+				addBtn.textContent = 'Add to Plot';
+				addBtn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					if (patternInput) {
+						patternInput.value = plainText;
+						updateExtractionPreview();
+						const plotTabBtn = document.querySelector('.tab[data-tab="plot"]');
+						if (plotTabBtn) {
+							plotTabBtn.click();
+						}
+					}
+				});
+				lineDiv.appendChild(addBtn);
+				
+				fragment.appendChild(lineDiv);
+				state = result.finalState;
+			}
+			
+			// Append fragment to DOM (single reflow)
+			monitor.appendChild(fragment);
+			
+			// Update buffer line if it exists (after appending complete lines)
+			if (lineBuffer) {
+				updateBufferLine();
+			}
+			
+			// Update tracking
+			lastRenderedLineIndex = endIndex - 1;
+			currentAnsiState = state;
+			
+			// Scroll to bottom
+			monitor.scrollTop = monitor.scrollHeight;
+			lastScrollTop = monitor.scrollTop;
+		}
+		
+		// Update only the buffer line (incomplete line at the end)
+		function updateBufferLine() {
+			if (!monitor || !lineBuffer) return;
+			
+			// Remove existing buffer line if present
+			const existingBuffer = monitor.querySelector('.line-buffer');
+			if (existingBuffer) {
+				existingBuffer.remove();
+			}
+			
+			// Create new buffer line
+			const textForDisplay = lineBuffer;
+			const result = parseAnsi(textForDisplay, currentAnsiState);
+			const bufferDiv = document.createElement('div');
+			bufferDiv.className = 'line line-buffer';
+			bufferDiv.innerHTML = result.html;
+			monitor.appendChild(bufferDiv);
+			currentAnsiState = result.finalState;
 		}
 		
 		function renderLinesWithBuffer(forcedAnchorLine, forcedAnchorOffset) {
@@ -1668,6 +1795,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 				});
 			});
 			
+			// Update render tracking after full render
+			lastRenderedLineIndex = rawLines.length - 1;
+			lastFilterPattern = filterPattern;
+			
 			// Restore scroll position based on follow state
 			if (shouldStickToBottom) {
 				monitor.scrollTop = monitor.scrollHeight;
@@ -1755,6 +1886,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 							isFollowing = false;
 							freezeView();
 							anchorLostScrollTop = null; // Clear anchor lost tracking
+							// Reset render tracking when switching to non-following mode
+							needsFullRender = true;
+							lastRenderedLineIndex = -1;
 						} else if (!isFrozenView) {
 							freezeView();
 							anchorLostScrollTop = null; // Clear anchor lost tracking
@@ -1765,6 +1899,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 						if (!isFollowing && anchorLostScrollTop === null) {
 							isFollowing = true;
 							unfreezeView();
+							// Reset render tracking when switching to following mode
+							needsFullRender = true;
+							lastRenderedLineIndex = -1;
 							renderLinesWithBuffer();
 						}
 					}
@@ -1841,6 +1978,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			lastScrollTop = 0;
 			isFollowing = true; // Reset to following mode after clear
 			unfreezeView();
+			lastRenderedLineIndex = -1; // Reset render tracking
+			needsFullRender = false;
 			updateLineUsage();
 			vscode.postMessage({ command: 'clear' });
 		});
@@ -1868,10 +2007,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 		// Filter input event listener
 		if (filterInput) {
 			filterInput.addEventListener('input', () => {
-				filterPattern = filterInput.value.trim();
+				const newPattern = filterInput.value.trim();
+				const filterChanged = newPattern !== filterPattern;
+				filterPattern = newPattern;
 				console.log('FancyMon: Filter pattern changed to:', filterPattern);
-				// Re-render with new filter
-				renderLinesWithBuffer();
+				// Re-render with new filter (force full render)
+				if (filterChanged) {
+					needsFullRender = true;
+					lastRenderedLineIndex = -1;
+					renderLinesWithBuffer();
+				}
 			});
 		}
 
@@ -2208,6 +2353,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					monitor.innerHTML = '';
 					lastScrollTop = 0;
 					isFollowing = true; // Reset to following mode after clear
+					lastRenderedLineIndex = -1; // Reset render tracking
+					needsFullRender = false;
 					updateLineUsage();
 					break;
 					
