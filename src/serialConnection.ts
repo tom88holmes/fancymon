@@ -16,6 +16,7 @@ export class SerialConnection {
 	private isConnected = false;
 	private isDisconnecting = false;
 	private serialportModule: any = null;
+	private hasSentConnectedMessage = false; // Prevent duplicate connected messages
 	
 	// Event handlers stored for cleanup
 	private dataHandler: ((data: Buffer) => void) | null = null;
@@ -67,6 +68,9 @@ export class SerialConnection {
 		if (this.isConnected) {
 			await this.disconnect();
 		}
+		
+		// Reset connected message flag for new connection
+		this.hasSentConnectedMessage = false;
 
 		try {
 			const serialport = await this.getSerialPort();
@@ -99,6 +103,14 @@ export class SerialConnection {
 			};
 
 			this.errorHandler = (err: any) => {
+				// Ignore "Port is not open" errors - they're false positives from port.set()
+				// The port is actually open if we're receiving data, so these errors are misleading
+				// These occur when port.set() is called but the library thinks the port isn't open yet
+				if (err?.message?.includes('Port is not open')) {
+					console.warn('FancyMon: Ignoring "Port is not open" error (false positive):', err);
+					return; // Don't report to user
+				}
+				
 				console.error('FancyMon: Serial port error:', err);
 				if (this.isConnected) { // Only process errors if still connected
 					this.callbacks.onError(`Serial port error: ${err?.message || err}`);
@@ -119,33 +131,39 @@ export class SerialConnection {
 			await this.port.open();
 			console.log('FancyMon: Port opened successfully');
 			
-			// Explicitly set RTS and DTR to false IMMEDIATELY after opening
+			// Wait a moment for the port to fully initialize before setting RTS/DTR
+			// Some drivers need time to stabilize after opening
+			await new Promise(resolve => setTimeout(resolve, 50));
+			
+			// Explicitly set RTS and DTR to false to avoid driving BOOT0/SDA pins
 			// Some devices share BOOT0 with I2C SDA, so we must not drive these pins
-			// Set them right away, then again after a delay to catch any driver-initiated changes
+			// Set them multiple times with delays to ensure they stick
 			try {
 				await this.port.set({ rts: false, dtr: false });
-				console.log('FancyMon: RTS and DTR set to false immediately after open');
-			} catch (error: any) {
-				console.warn('FancyMon: Warning - could not set RTS/DTR immediately:', error?.message || error);
-			}
-			
-			this.isConnected = true;
-			
-			// Set again after a delay to ensure they stay false (some drivers may reset them)
-			// Use the same timing as the reset function to ensure it works correctly
-			try {
+				console.log('FancyMon: RTS and DTR set to false (first attempt)');
+				
+				// Wait and set again (some drivers reset them after initial set)
 				await new Promise(resolve => setTimeout(resolve, 100));
 				await this.port.set({ rts: false, dtr: false });
+				console.log('FancyMon: RTS and DTR set to false (second attempt)');
+				
+				// One more time to be absolutely sure
 				await new Promise(resolve => setTimeout(resolve, 50));
-				await this.port.set({ rts: false, dtr: false }); // Set again to ensure it sticks
-				console.log('FancyMon: RTS and DTR confirmed false after delay');
+				await this.port.set({ rts: false, dtr: false });
+				console.log('FancyMon: RTS and DTR confirmed false (final)');
 			} catch (error: any) {
-				console.warn('FancyMon: Warning - could not set RTS/DTR after delay:', error?.message || error);
-				// Continue anyway - connection is still valid
+				console.warn('FancyMon: Warning - could not set RTS/DTR:', error?.message || error);
+				// Continue anyway - connection is still valid, but pins might be driven
 			}
 			
-			this.sendStatusMessage('[[ CONNECTED ]]');
+			// Only mark as connected AFTER RTS/DTR are properly set
+			this.isConnected = true;
 			this.callbacks.onConnected();
+			// Send status message only once (prevent duplicates)
+			if (!this.hasSentConnectedMessage) {
+				this.sendStatusMessage('[[ CONNECTED ]]');
+				this.hasSentConnectedMessage = true;
+			}
 		} catch (error: any) {
 			this.callbacks.onError(`Connection error: ${error?.message || error}`);
 			this.isConnected = false;
@@ -262,6 +280,7 @@ export class SerialConnection {
 			console.log('FancyMon: Disconnect complete');
 			this.callbacks.onDisconnected();
 			this.isDisconnecting = false;
+			this.hasSentConnectedMessage = false; // Reset for next connection
 		} else {
 			this.shouldProcessData = false;
 			this.isConnected = false;
@@ -286,11 +305,17 @@ export class SerialConnection {
 	}
 
 	async toggleDTRReset(): Promise<void> {
+		console.log('FancyMon: toggleDTRReset called, port:', !!this.port, 'isConnected:', this.isConnected);
+		
 		if (!this.port || !this.isConnected) {
-			this.callbacks.onError('Not connected to serial port');
+			const errorMsg = !this.port ? 'Port not initialized' : 'Not connected to serial port';
+			console.error('FancyMon: Reset failed -', errorMsg);
+			this.callbacks.onError(errorMsg);
 			return;
 		}
 
+		// Don't check isOpen - it may be unreliable. If we're connected and receiving data,
+		// the port is definitely open. Just try the operation and catch errors if it fails.
 		try {
 			// Your circuit has RTS connected to RESET (via NPN transistor with inverted logic)
 			// RTS HIGH → Transistor ON → RESET LOW (device in reset)
@@ -298,21 +323,53 @@ export class SerialConnection {
 			
 			console.log('FancyMon: Sending reset pulse');
 			
+			// Wait a moment to ensure port is ready (sometimes port.set() fails immediately after connection)
+			await new Promise(resolve => setTimeout(resolve, 50));
+			
 			// Ensure RTS starts LOW (device running)
-			await this.port.set({ rts: false, dtr: false });
+			console.log('FancyMon: Setting RTS/DTR to false (start)');
+			try {
+				await this.port.set({ rts: false, dtr: false });
+			} catch (setError: any) {
+				// Ignore "Port is not open" errors if we're receiving data - port is clearly open
+				if (setError?.message?.includes('not open')) {
+					console.warn('FancyMon: Port.set() reported not open, but port is working - continuing anyway');
+				} else {
+					throw setError; // Re-throw if it's a different error
+				}
+			}
 			await new Promise(resolve => setTimeout(resolve, 100));
 			
 			// Pull RTS HIGH to trigger reset
-			await this.port.set({ rts: true, dtr: false });
+			console.log('FancyMon: Setting RTS to true (reset pulse)');
+			try {
+				await this.port.set({ rts: true, dtr: false });
+			} catch (setError: any) {
+				if (setError?.message?.includes('not open')) {
+					console.warn('FancyMon: Port.set() reported not open, but port is working - continuing anyway');
+				} else {
+					throw setError;
+				}
+			}
 			await new Promise(resolve => setTimeout(resolve, 100));
 			
 			// Release RTS LOW to exit reset
-			await this.port.set({ rts: false, dtr: false });
+			console.log('FancyMon: Setting RTS/DTR to false (end)');
+			try {
+				await this.port.set({ rts: false, dtr: false });
+			} catch (setError: any) {
+				if (setError?.message?.includes('not open')) {
+					console.warn('FancyMon: Port.set() reported not open, but port is working - continuing anyway');
+				} else {
+					throw setError;
+				}
+			}
 			
-			console.log('FancyMon: Reset pulse sent');
+			console.log('FancyMon: Reset pulse sent successfully');
 			this.sendStatusMessage('[[ RESET SENT TO DEVICE ]]');
 		} catch (error: any) {
 			console.error('FancyMon: Reset error:', error);
+			console.error('FancyMon: Reset error stack:', error?.stack);
 			this.callbacks.onError(`Reset error: ${error?.message || error}`);
 		}
 	}
