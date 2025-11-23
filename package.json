@@ -1,18 +1,20 @@
 {
   "name": "fancymon",
-  "displayName": "fancymon",
-  "description": "Fanchy serial monitor",
+  "displayName": "FancyMon - Serial Monitor",
+  "description": "A fancy serial monitor with advanced features including filtering, plotting, and real-time data visualization",
   "version": "0.0.1",
+  "publisher": "wombat",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tom88holmes/fancymon.git"
+  },
   "engines": {
-    "vscode": "^1.99.0"
+    "vscode": "^1.106.0"
   },
   "categories": [
     "Other"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [
-    "onCommand:fancymon.start"
-  ],
   "contributes": {
     "commands": [
       {

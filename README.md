@@ -1,71 +1,86 @@
-# fancymon README
+# FancyMon - Serial Monitor
 
-This is the README for your extension "fancymon". After writing up a brief description, we recommend including the following sections.
+A powerful and feature-rich serial monitor extension for Visual Studio Code with advanced filtering, real-time plotting, and data visualization capabilities.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+### Core Serial Monitoring
+- **Real-time Serial Communication**: Connect to any serial port with configurable baud rates (up to 2Mbps), data bits, stop bits, and parity settings
+- **ANSI Color Support**: Full support for ANSI escape codes with proper color rendering
+- **Auto-scroll**: Automatically follows incoming data with smart scroll position management
+- **High Performance**: Optimized rendering engine that handles thousands of lines efficiently
 
-For example if there is an image subfolder under your extension project workspace:
+### Advanced Filtering
+- **Real-time Filtering**: Filter lines by pattern matching as you type
+- **Copy Options**: Copy all lines, filtered lines, or visible lines to clipboard
+- **Configurable Buffer**: Adjustable maximum line count (100 to 1,000,000 lines)
 
-\!\[feature X\]\(images/feature-x.png\)
+### Data Visualization & Plotting
+- **Real-time Plotting**: Extract numeric values from serial data and plot them in real-time
+- **Multiple Variables**: Track and plot multiple variables simultaneously
+- **Custom Patterns**: Use regex patterns to extract values from serial lines
+- **Time-based X-axis**: Extract time/uptime values for time-series plotting
+- **Interactive Charts**: Powered by Chart.js with zoom, pan, and legend support
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+### Additional Features
+- **Save to File**: Export serial data to a file
+- **Device Reset**: Send reset pulses via DTR/RTS control lines
+- **RTS/DTR Control**: Properly configured to avoid interfering with shared pins (e.g., BOOT0/SDA)
+- **Frozen View**: Scroll up to review old data without losing your position
+- **Line Usage Indicator**: Monitor buffer usage in real-time
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- Visual Studio Code 1.106.0 or higher
+- A serial port (USB-to-Serial adapter, built-in serial port, etc.)
+
+## Usage
+
+1. Open the Command Palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
+2. Run the command: **"FancyMon: Start Serial Monitor"**
+3. Select your serial port from the dropdown
+4. Configure baud rate and other serial settings
+5. Click **"Connect"** to start monitoring
+
+### Plotting Data
+
+1. Switch to the **"Plot"** tab
+2. Enter a sample line from your serial output in the "Pattern Input" field
+3. The extension will automatically extract numbers from the line
+4. Select which numbers you want to plot
+5. Click **"Add Variable to Plot"**
+6. The extension will automatically extract matching values from incoming serial data and plot them in real-time
+
+### Filtering Lines
+
+Type a pattern in the **"Filter"** input field to show only lines matching that pattern. The filter works in real-time as you type.
 
 ## Extension Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+This extension does not currently add any VS Code settings. All configuration is done through the serial monitor interface.
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+None at this time. If you encounter any issues, please report them on the extension's GitHub repository.
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+### 0.0.1
 
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
+Initial release of FancyMon Serial Monitor with:
+- Serial port communication
+- Real-time data display with ANSI color support
+- Advanced filtering capabilities
+- Real-time data plotting and visualization
+- High-performance rendering for large data streams
+- Proper RTS/DTR control to avoid pin conflicts
 
 ---
 
-## Following extension guidelines
+## Contributing
 
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
+Contributions are welcome! Please feel free to submit issues or pull requests.
 
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
+## License
 
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+See the LICENSE file for details.
