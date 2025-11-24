@@ -2,17 +2,32 @@
   "name": "fancymon",
   "displayName": "FancyMon - Serial Monitor",
   "description": "A fancy serial monitor with advanced features including filtering, plotting, and real-time data visualization",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "publisher": "wombat",
+  "icon": "fancymon_no_text.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/tom88holmes/fancymon.git"
   },
   "engines": {
-    "vscode": "^1.106.0"
+    "vscode": "^1.99.0"
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "serial",
+    "monitor",
+    "uart",
+    "usb",
+    "arduino",
+    "embedded",
+    "plotting",
+    "data",
+    "visualization",
+    "filtering",
+    "ansi",
+    "terminal"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -26,6 +41,11 @@
       {
         "command": "fancymon.test",
         "title": "FancyMon Test",
+        "category": "FancyMon"
+      },
+      {
+        "command": "fancymon.disconnect",
+        "title": "Disconnect Serial Monitor",
         "category": "FancyMon"
       }
     ],
@@ -58,7 +78,7 @@
     "serialport": "^11.0.0"
   },
   "devDependencies": {
-    "@types/vscode": "^1.106.0",
+    "@types/vscode": "^1.99.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "typescript-eslint": "^8.46.3",

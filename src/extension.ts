@@ -9,11 +9,6 @@ console.error('FancyMon: Module file is being loaded!');
 console.log('FancyMon: Module file is being loaded!');
 
 export function activate(context: vscode.ExtensionContext) {
-	// Force immediate notification to verify activation
-	vscode.window.showInformationMessage('FancyMon: Extension is ACTIVATING!', 'OK').then(() => {
-		console.log('User acknowledged activation message');
-	});
-	
 	console.log('=== FancyMon extension ACTIVATING ===');
 	console.log('Extension context:', context.extensionPath);
 	console.log('Extension URI:', context.extensionUri.toString());
@@ -21,7 +16,6 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register command immediately - don't wait for SerialMonitor
 	const disposable = vscode.commands.registerCommand('fancymon.start', async () => {
 		console.log('=== fancymon.start command INVOKED ===');
-		vscode.window.showInformationMessage('FancyMon: Command was called!');
 		
 		try {
 			// Lazy load SerialMonitor only when command is called
@@ -74,8 +68,43 @@ export function activate(context: vscode.ExtensionContext) {
 		console.log('FancyMon test command was called!');
 	});
 
+	// Register disconnect command (can be called by ESP-IDF or other extensions)
+	const disconnectDisposable = vscode.commands.registerCommand('fancymon.disconnect', async () => {
+		console.log('FancyMon: Disconnect command called (likely by ESP-IDF or task)');
+		if (serialMonitor && serialMonitor.connection && serialMonitor.connection.connected) {
+			await serialMonitor.disconnect();
+			console.log('FancyMon: Disconnected successfully');
+		} else {
+			console.log('FancyMon: Not connected, nothing to disconnect');
+		}
+	});
+
+	// Auto-detect ESP-IDF flash/build tasks and disconnect
+	const taskStartDisposable = vscode.tasks.onDidStartTask(async (event) => {
+		const taskName = event.execution.task.name?.toLowerCase() || '';
+		const taskType = event.execution.task.definition?.type || '';
+		const taskCommand = event.execution.task.definition?.command || '';
+		
+		// Check if it's an ESP-IDF flash/build task
+		const isIdfTask = taskType === 'idf' || 
+		                  taskName.includes('flash') || 
+		                  taskName.includes('build and flash') ||
+		                  taskName.includes('idf') ||
+		                  taskCommand.includes('idf.py') && (taskCommand.includes('flash') || taskCommand.includes('build'));
+		
+		if (isIdfTask) {
+			console.log('FancyMon: ESP-IDF flash/build task detected, auto-disconnecting...');
+			if (serialMonitor && serialMonitor.connection && serialMonitor.connection.connected) {
+				await serialMonitor.disconnect();
+				console.log('FancyMon: Auto-disconnected for ESP-IDF task');
+			}
+		}
+	});
+
 	context.subscriptions.push(disposable);
 	context.subscriptions.push(testDisposable);
+	context.subscriptions.push(disconnectDisposable);
+	context.subscriptions.push(taskStartDisposable);
 	
 	console.log('=== FancyMon commands registered successfully ===');
 	console.log('Registered commands:', vscode.commands.getCommands().then(cmds => {

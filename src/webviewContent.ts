@@ -119,6 +119,38 @@ export function getWebviewContentHtml(cspSource: string): string {
 			background-color: var(--vscode-testing-iconPassed);
 		}
 
+		button.toggle {
+			position: relative;
+		}
+
+		button.toggle.active {
+			background-color: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-button-secondaryForeground);
+		}
+
+		button.toggle.active:hover {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+
+		button.toggle::before {
+			content: '';
+			display: inline-block;
+			width: 12px;
+			height: 12px;
+			margin-right: 6px;
+			border: 2px solid currentColor;
+			border-radius: 2px;
+			vertical-align: middle;
+		}
+
+		button.toggle.active::before {
+			background-color: currentColor;
+			background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='white' d='M6.564.75l-3.59 3.612-1.538-1.55L0 4.26l2.974 2.99L8 2.193z'/%3E%3C/svg%3E");
+			background-size: contain;
+			background-repeat: no-repeat;
+			background-position: center;
+		}
+
 		.monitor {
 			flex: 1 1 auto;
 			min-height: 0;
@@ -184,10 +216,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 			opacity: 0.8;
 		}
 
-		.line {
-			display: block;
-			white-space: pre-wrap;
-			word-break: break-word;
+		/* Line clipping mode (no wrapping) */
+		.monitor.no-wrap .line {
+			white-space: pre;
+			word-break: normal;
 		}
 
 		/* ANSI color classes */
@@ -280,28 +312,30 @@ export function getWebviewContentHtml(cspSource: string): string {
 			position: relative;
 		}
 
-		.line:hover .add-to-plot-btn {
-			opacity: 1;
-		}
-
-		.add-to-plot-btn {
-			position: absolute;
-			right: 5px;
-			top: 2px;
-			opacity: 0;
-			transition: opacity 0.2s;
-			background-color: var(--vscode-button-background);
-			color: var(--vscode-button-foreground);
-			border: none;
-			padding: 2px 6px;
-			font-size: 10px;
-			cursor: pointer;
+		/* Context menu styling */
+		.context-menu {
+			position: fixed;
+			background-color: var(--vscode-menu-background);
+			border: 1px solid var(--vscode-menu-border);
 			border-radius: 2px;
-			z-index: 10;
+			padding: 4px 0;
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+			z-index: 1000;
+			min-width: 180px;
+			display: none;
 		}
 
-		.add-to-plot-btn:hover {
-			background-color: var(--vscode-button-hoverBackground);
+		.context-menu-item {
+			padding: 6px 12px;
+			cursor: pointer;
+			color: var(--vscode-menu-foreground);
+			font-size: 13px;
+			user-select: none;
+		}
+
+		.context-menu-item:hover {
+			background-color: var(--vscode-menu-selectionBackground);
+			color: var(--vscode-menu-selectionForeground);
 		}
 
 		/* Plot view styling */
@@ -474,12 +508,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 		</div>
 
 		<button id="sendResetBtn" disabled>Send Reset</button>
-		<button id="connectBtn" class="success">Connect</button>
-		<button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+		<button id="connectToggleBtn" class="success">Connect</button>
 	</div>
 
 	<div class="controls-row">
 		<button id="clearBtn">Clear</button>
+		<button id="toggleWrapBtn" class="toggle active" title="Toggle line wrapping">Wrap</button>
 		<div class="control-group">
 			<label>Max Lines:</label>
 			<input type="number" id="maxLines" value="10000" min="100" max="1000000" style="width: 100px;">
@@ -602,9 +636,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const stopBits = document.getElementById('stopBits');
 		const parity = document.getElementById('parity');
 		const sendResetBtn = document.getElementById('sendResetBtn');
-		const connectBtn = document.getElementById('connectBtn');
-		const disconnectBtn = document.getElementById('disconnectBtn');
+		const connectToggleBtn = document.getElementById('connectToggleBtn');
 		const clearBtn = document.getElementById('clearBtn');
+		const toggleWrapBtn = document.getElementById('toggleWrapBtn');
 		const sendInput = document.getElementById('sendInput');
 		const sendBtn = document.getElementById('sendBtn');
 		const refreshPorts = document.getElementById('refreshPorts');
@@ -625,6 +659,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let frozenAnchorLine = null;
 		let frozenAnchorOffset = 0;
 		let anchorLostScrollTop = null; // Track scroll position when anchor was lost
+		let lineWrapEnabled = true; // Default to wrapping enabled
 		
 		// Raw text storage - stores lines as strings with ANSI codes preserved
 		let rawLines = [];
@@ -635,6 +670,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let lastRenderedLineIndex = -1; // Last line index that was rendered
 		let lastFilterPattern = ''; // Last filter pattern used for rendering
 		let needsFullRender = false; // Flag to force full render (e.g., filter changed, lines trimmed)
+		let pendingScroll = false; // Flag to throttle scroll operations
 
 		// Plotting variables
 		const tabs = document.querySelectorAll('.tab');
@@ -1204,8 +1240,20 @@ export function getWebviewContentHtml(cspSource: string): string {
 			dataBits.disabled = isConnected || isDisconnecting;
 			stopBits.disabled = isConnected || isDisconnecting;
 			parity.disabled = isConnected || isDisconnecting;
-			connectBtn.disabled = isConnected || isDisconnecting || !portSelect.value;
-			disconnectBtn.disabled = !isConnected || isDisconnecting;
+			
+			// Update toggle button based on connection state
+			if (connectToggleBtn) {
+				if (isConnected) {
+					connectToggleBtn.textContent = 'Disconnect';
+					connectToggleBtn.className = 'danger';
+					connectToggleBtn.disabled = isDisconnecting;
+				} else {
+					connectToggleBtn.textContent = 'Connect';
+					connectToggleBtn.className = 'success';
+					connectToggleBtn.disabled = isDisconnecting || !portSelect.value;
+				}
+			}
+			
 			sendResetBtn.disabled = !isConnected || isDisconnecting;
 			sendInput.disabled = !isConnected || isDisconnecting;
 			sendBtn.disabled = !isConnected || isDisconnecting;
@@ -1470,15 +1518,44 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		function trimOldLines() {
 			// Trim old lines from raw text array
+			// Batch trimming: trim down to maxLines - 50 to avoid trimming on every single line
+			// This means we'll only trim again after 50 more lines are added
+			const trimThreshold = Math.max(100, Math.floor(maxLines * 0.1)); // Trim threshold: 10% of maxLines or 100, whichever is larger
+			const targetSize = maxLines - trimThreshold;
+			
 			if (rawLines.length > maxLines) {
-				const linesToRemove = rawLines.length - maxLines;
+				const linesToRemove = rawLines.length - targetSize;
 				
 				// Remove old lines from the start
 				rawLines.splice(0, linesToRemove);
 				lineCount = rawLines.length;
 				totalTrimmedLines += linesToRemove;
 				
-				// Don't render here - let appendData() handle rendering based on frozen state
+				// Incrementally remove DOM nodes instead of full re-render (much faster!)
+				if (monitor && isFollowing && !filterPattern) {
+					// Direct child removal is much faster than querySelectorAll
+					// Remove the first N children that are line elements (not buffer line)
+					let removed = 0;
+					while (removed < linesToRemove && monitor.firstElementChild) {
+						const child = monitor.firstElementChild;
+						// Only remove elements with data-line attribute (actual lines, not buffer)
+						if (child.classList.contains('line') && child.hasAttribute('data-line')) {
+							monitor.removeChild(child);
+							removed++;
+						} else {
+							// Skip non-line elements (like scrollbar indicator) - shouldn't happen, but be safe
+							break;
+						}
+					}
+					
+					// Update lastRenderedLineIndex to account for trimmed lines
+					// Since we removed lines from the start, adjust the index
+					if (lastRenderedLineIndex >= 0) {
+						lastRenderedLineIndex = Math.max(-1, lastRenderedLineIndex - linesToRemove);
+					}
+				}
+				
+				// Don't force full render - incremental removal is much faster
 			}
 		}
 
@@ -1539,18 +1616,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Trim old lines if we exceed max
+			// Only trim when significantly over limit to reduce frequency of trimming operations
 			if (lineCount > maxLines) {
 				const linesTrimmed = rawLines.length - maxLines;
 				trimOldLines();
-				// If lines were trimmed, we need to re-render everything
-				if (linesTrimmed > 0) {
+				// Don't force full render - trimOldLines() handles incremental DOM removal
+				// Only force full render if we're not following or filter is active
+				if (linesTrimmed > 0 && (!isFollowing || filterPattern)) {
 					needsFullRender = true;
 					lastRenderedLineIndex = -1; // Reset render tracking
 				}
 			}
 			
-			// Update usage whenever new complete lines arrive (or when near limit)
-			if (linesAdded > 0 || lineCount > maxLines * 0.9) {
+			// Update usage - throttle to avoid excessive DOM updates
+			// Only update every 10 lines or when significantly over limit
+			if (linesAdded > 0 && (lineCount % 10 === 0 || lineCount > maxLines * 0.95)) {
 				updateLineUsage();
 			}
 			
@@ -1631,43 +1711,36 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 			
-			// Use DocumentFragment for efficient batch DOM updates
-			const fragment = document.createDocumentFragment();
+			// Build HTML string for all new lines at once (much faster than DOM operations)
+			let html = '';
 			let state = currentAnsiState; // Use current ANSI state
 			
-			// Process only new lines
+			// Process only new lines - build HTML string
 			for (let idx = startIndex; idx < endIndex; idx++) {
 				const line = rawLines[idx];
 				const textForDisplay = line.endsWith(newlineChar) ? line.slice(0, -1) : line;
 				const result = parseAnsi(textForDisplay, state);
 				const plainText = stripAnsiCodes(textForDisplay);
 				
-				const lineDiv = document.createElement('div');
-				lineDiv.className = 'line';
-				lineDiv.setAttribute('data-line', (totalTrimmedLines + idx + 1).toString());
-				lineDiv.setAttribute('data-text', plainText);
-				lineDiv.innerHTML = result.html;
+				// Escape HTML in plainText for data attribute
+				const escapedPlainText = plainText.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 				
-				// Add "Add to Plot" button
-				const addBtn = document.createElement('button');
-				addBtn.className = 'add-to-plot-btn';
-				addBtn.setAttribute('data-line-text', plainText);
-				addBtn.textContent = 'Add to Plot';
-				addBtn.addEventListener('click', (e) => {
-					e.stopPropagation();
-					if (patternInput) {
-						patternInput.value = plainText;
-						updateExtractionPreview();
-						const plotTabBtn = document.querySelector('.tab[data-tab="plot"]');
-						if (plotTabBtn) {
-							plotTabBtn.click();
-						}
-					}
-				});
-				lineDiv.appendChild(addBtn);
+				// Build HTML string directly (much faster than DOM operations)
+				html += '<div class="line" data-line="' + (totalTrimmedLines + idx + 1) + '" data-text="' + escapedPlainText + '">' + 
+					result.html + 
+					'</div>';
 				
-				fragment.appendChild(lineDiv);
 				state = result.finalState;
+			}
+			
+			// Create a temporary container and set innerHTML once (single DOM operation)
+			const tempDiv = document.createElement('div');
+			tempDiv.innerHTML = html;
+			
+			// Move all children to fragment (faster than appendChild one by one)
+			const fragment = document.createDocumentFragment();
+			while (tempDiv.firstChild) {
+				fragment.appendChild(tempDiv.firstChild);
 			}
 			
 			// Append fragment to DOM (single reflow)
@@ -1682,9 +1755,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 			lastRenderedLineIndex = endIndex - 1;
 			currentAnsiState = state;
 			
-			// Scroll to bottom
-			monitor.scrollTop = monitor.scrollHeight;
-			lastScrollTop = monitor.scrollTop;
+			// Scroll to bottom - use requestAnimationFrame to batch scroll operations
+			// This prevents blocking if multiple batches arrive quickly
+			if (!pendingScroll) {
+				pendingScroll = true;
+				requestAnimationFrame(() => {
+					if (monitor && isFollowing) {
+						monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
+						lastScrollTop = monitor.scrollTop;
+					}
+					pendingScroll = false;
+				});
+			}
 		}
 		
 		// Update only the buffer line (incomplete line at the end)
@@ -1697,7 +1779,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				existingBuffer.remove();
 			}
 			
-			// Create new buffer line
+			// Create new buffer line using innerHTML (faster than DOM operations)
 			const textForDisplay = lineBuffer;
 			const result = parseAnsi(textForDisplay, currentAnsiState);
 			const bufferDiv = document.createElement('div');
@@ -1705,6 +1787,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 			bufferDiv.innerHTML = result.html;
 			monitor.appendChild(bufferDiv);
 			currentAnsiState = result.finalState;
+			
+			// Scroll to bottom if following - use throttled scroll
+			if (isFollowing && !pendingScroll) {
+				pendingScroll = true;
+				requestAnimationFrame(() => {
+					if (monitor && isFollowing) {
+						monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
+						lastScrollTop = monitor.scrollTop;
+					}
+					pendingScroll = false;
+				});
+			}
 		}
 		
 		function renderLinesWithBuffer(forcedAnchorLine, forcedAnchorOffset) {
@@ -1767,7 +1861,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const result = parseAnsi(textForDisplay, state);
 				const plainText = stripAnsiCodes(textForDisplay);
 				if (entry.lineNumber !== null && entry.lineNumber !== undefined) {
-					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtml(plainText) + '">' + result.html + '<button class="add-to-plot-btn" data-line-text="' + escapeHtml(plainText) + '">Add to Plot</button></div>';
+					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtml(plainText) + '">' + result.html + '</div>';
 				} else {
 					html += '<div class="line line-buffer">' + result.html + '</div>';
 				}
@@ -1777,23 +1871,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Update the monitor with rendered HTML
 			monitor.innerHTML = html;
 			
-			// Attach event listeners to "Add to Plot" buttons
-			const addToPlotButtons = monitor.querySelectorAll('.add-to-plot-btn');
-			addToPlotButtons.forEach(btn => {
-				btn.addEventListener('click', (e) => {
-					e.stopPropagation();
-					const lineText = btn.getAttribute('data-line-text');
-					if (lineText && patternInput) {
-						patternInput.value = lineText;
-						updateExtractionPreview();
-						// Switch to plot tab
-						const plotTabBtn = document.querySelector('.tab[data-tab="plot"]');
-						if (plotTabBtn) {
-							plotTabBtn.click();
-						}
-					}
-				});
-			});
+			// No need to attach event listeners - event delegation handles all clicks
 			
 			// Update render tracking after full render
 			lastRenderedLineIndex = rawLines.length - 1;
@@ -1801,7 +1879,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Restore scroll position based on follow state
 			if (shouldStickToBottom) {
-				monitor.scrollTop = monitor.scrollHeight;
+				// Scroll to bottom - use throttled scroll for better performance
+				if (!pendingScroll) {
+					pendingScroll = true;
+					requestAnimationFrame(() => {
+						if (monitor && isFollowing) {
+							monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
+							lastScrollTop = monitor.scrollTop;
+						}
+						pendingScroll = false;
+					});
+				}
 			} else {
 				let restored = false;
 				
@@ -1912,6 +2000,76 @@ export function getWebviewContentHtml(cspSource: string): string {
 			} catch (e) {
 				console.error('FancyMon: Error setting up scroll listener:', e);
 			}
+			
+			// Right-click context menu for lines
+			let contextMenu = null;
+			let selectedLineElement = null;
+			
+			// Create context menu element
+			function createContextMenu() {
+				if (contextMenu) return contextMenu;
+				contextMenu = document.createElement('div');
+				contextMenu.className = 'context-menu';
+				contextMenu.id = 'contextMenu';
+				const menuItem = document.createElement('div');
+				menuItem.className = 'context-menu-item';
+				menuItem.textContent = 'Add selected line to plot';
+				menuItem.addEventListener('click', () => {
+					if (selectedLineElement) {
+						const lineText = selectedLineElement.getAttribute('data-text');
+						if (lineText && patternInput) {
+							patternInput.value = lineText;
+							updateExtractionPreview();
+							const plotTabBtn = document.querySelector('.tab[data-tab="plot"]');
+							if (plotTabBtn) {
+								plotTabBtn.click();
+							}
+						}
+					}
+					hideContextMenu();
+				});
+				contextMenu.appendChild(menuItem);
+				document.body.appendChild(contextMenu);
+				return contextMenu;
+			}
+			
+			function showContextMenu(x, y, lineElement) {
+				const menu = createContextMenu();
+				selectedLineElement = lineElement;
+				menu.style.display = 'block';
+				menu.style.left = x + 'px';
+				menu.style.top = y + 'px';
+			}
+			
+			function hideContextMenu() {
+				if (contextMenu) {
+					contextMenu.style.display = 'none';
+					selectedLineElement = null;
+				}
+			}
+			
+			// Handle right-click on lines
+			monitor.addEventListener('contextmenu', (e) => {
+				// Find the closest .line element
+				const lineElement = e.target.closest('.line');
+				if (lineElement && lineElement.getAttribute('data-text')) {
+					e.preventDefault();
+					e.stopPropagation();
+					showContextMenu(e.pageX, e.pageY, lineElement);
+				}
+			});
+			
+			// Hide context menu on click elsewhere
+			document.addEventListener('click', (e) => {
+				if (contextMenu && !contextMenu.contains(e.target)) {
+					hideContextMenu();
+				}
+			});
+			
+			// Hide context menu on scroll
+			monitor.addEventListener('scroll', () => {
+				hideContextMenu();
+			});
 		}
 
 		function setStatus(message, type = '') {
@@ -1923,36 +2081,41 @@ export function getWebviewContentHtml(cspSource: string): string {
 			vscode.postMessage({ command: 'listPorts' });
 		});
 
-		connectBtn.addEventListener('click', () => {
-			if (!portSelect.value) {
-				setStatus('Please select a port', 'error');
-				return;
-			}
-			
-			vscode.postMessage({
-				command: 'connect',
-				config: {
-					port: portSelect.value,
-					baudRate: getBaudRate(),
-					dataBits: parseInt(dataBits.value),
-					stopBits: parseInt(stopBits.value),
-					parity: parity.value,
-					maxLines: maxLines
+		// Connect/Disconnect toggle button
+		if (connectToggleBtn) {
+			connectToggleBtn.addEventListener('click', () => {
+				if (isConnected) {
+					// Disconnect
+					if (isDisconnecting) {
+						return; // Prevent multiple clicks
+					}
+					isDisconnecting = true;
+					connectToggleBtn.disabled = true;
+					vscode.postMessage({ command: 'disconnect' });
+				} else {
+					// Connect
+					if (!portSelect.value) {
+						setStatus('Please select a port', 'error');
+						return;
+					}
+					
+					vscode.postMessage({
+						command: 'connect',
+						config: {
+							port: portSelect.value,
+							baudRate: getBaudRate(),
+							dataBits: parseInt(dataBits.value),
+							stopBits: parseInt(stopBits.value),
+							parity: parity.value,
+							maxLines: maxLines
+						}
+					});
 				}
 			});
-		});
+		}
 
 		sendResetBtn.addEventListener('click', () => {
 			vscode.postMessage({ command: 'sendReset' });
-		});
-
-		disconnectBtn.addEventListener('click', () => {
-			if (isDisconnecting) {
-				return; // Prevent multiple clicks
-			}
-			isDisconnecting = true;
-			disconnectBtn.disabled = true;
-			vscode.postMessage({ command: 'disconnect' });
 		});
 
 		// Update baud rate when custom field changes
@@ -1983,6 +2146,28 @@ export function getWebviewContentHtml(cspSource: string): string {
 			updateLineUsage();
 			vscode.postMessage({ command: 'clear' });
 		});
+
+		// Toggle line wrapping
+		if (toggleWrapBtn && monitor) {
+			toggleWrapBtn.addEventListener('click', () => {
+				lineWrapEnabled = !lineWrapEnabled;
+				if (lineWrapEnabled) {
+					monitor.classList.remove('no-wrap');
+					toggleWrapBtn.classList.add('active');
+					toggleWrapBtn.title = 'Line wrapping enabled (click to disable)';
+				} else {
+					monitor.classList.add('no-wrap');
+					toggleWrapBtn.classList.remove('active');
+					toggleWrapBtn.title = 'Line wrapping disabled (click to enable)';
+				}
+				
+				// Save wrap state
+				vscode.postMessage({
+					command: 'updateWrapState',
+					lineWrapEnabled: lineWrapEnabled
+				});
+			});
+		}
 
 		maxLinesInput.addEventListener('change', () => {
 			const newMax = parseInt(maxLinesInput.value) || 10000;
@@ -2277,11 +2462,28 @@ export function getWebviewContentHtml(cspSource: string): string {
 								updateLineUsage();
 							}
 							
+							// Restore wrap state
+							if (message.lineWrapEnabled !== undefined) {
+								lineWrapEnabled = message.lineWrapEnabled;
+								if (monitor && toggleWrapBtn) {
+									if (lineWrapEnabled) {
+										monitor.classList.remove('no-wrap');
+										toggleWrapBtn.classList.add('active');
+									} else {
+										monitor.classList.add('no-wrap');
+										toggleWrapBtn.classList.remove('active');
+									}
+									toggleWrapBtn.title = lineWrapEnabled ? 'Line wrapping enabled (click to disable)' : 'Line wrapping disabled (click to enable)';
+								}
+							}
+							
 							// Auto-connect if we have a valid configuration
 							if (shouldAutoConnect && config.port && config.baudRate) {
 								console.log('FancyMon: Auto-connecting with restored configuration...');
 								setTimeout(() => {
-									connectBtn.click();
+									if (connectToggleBtn) {
+										connectToggleBtn.click();
+									}
 								}, 100); // Small delay to ensure UI is updated
 							}
 						}
@@ -2292,6 +2494,22 @@ export function getWebviewContentHtml(cspSource: string): string {
 						option.textContent = 'No ports found';
 						portSelect.appendChild(option);
 					}
+					
+					// Restore wrap state (even if no ports/config available)
+					if (message.lineWrapEnabled !== undefined) {
+						lineWrapEnabled = message.lineWrapEnabled;
+						if (monitor && toggleWrapBtn) {
+							if (lineWrapEnabled) {
+								monitor.classList.remove('no-wrap');
+								toggleWrapBtn.classList.add('active');
+							} else {
+								monitor.classList.add('no-wrap');
+								toggleWrapBtn.classList.remove('active');
+							}
+							toggleWrapBtn.title = lineWrapEnabled ? 'Line wrapping enabled (click to disable)' : 'Line wrapping disabled (click to enable)';
+						}
+					}
+					
 					updateUI();
 					break;
 					
@@ -2342,7 +2560,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 					break;
 					
 				case 'error':
+					// Reset connection state on error (connection failed)
+					isConnected = false;
+					isDisconnecting = false;
 					setStatus(message.message, 'error');
+					updateUI();
 					break;
 					
 				case 'clear':
@@ -2384,7 +2606,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const resizeObserver = new ResizeObserver(() => {
 				// If following, scroll to bottom after resize
 				if (isFollowing && monitor) {
-					monitor.scrollTop = monitor.scrollHeight;
+					monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
 					lastScrollTop = monitor.scrollTop;
 				}
 			});
@@ -2394,7 +2616,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			window.addEventListener('resize', () => {
 				// If following, scroll to bottom after resize
 				if (isFollowing && monitor) {
-					monitor.scrollTop = monitor.scrollHeight;
+					monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
 					lastScrollTop = monitor.scrollTop;
 				}
 			});

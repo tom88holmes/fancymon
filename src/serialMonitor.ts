@@ -12,6 +12,7 @@ export interface SerialMonitorConfig {
 	stopBits: 1 | 2;
 	parity: 'none' | 'even' | 'odd';
 	maxLines?: number;
+	lineWrapEnabled?: boolean;
 }
 
 
@@ -19,7 +20,8 @@ export class SerialMonitor {
 	public panel: vscode.WebviewPanel | null = null; // Made public for cleanup
 	private messageQueue: string[] = [];
 	private readonly configKey = 'fancymon.lastConfig';
-	private connection: SerialConnection;
+	private readonly wrapStateKey = 'fancymon.lineWrapEnabled';
+	public connection: SerialConnection; // Made public for external access
 
 	constructor(private context: vscode.ExtensionContext) {
 		// Set up connection with callbacks
@@ -148,13 +150,17 @@ export class SerialMonitor {
 						await this.saveToFile(message.content);
 						break;
 					case 'updateConfig':
-						// Update and save configuration (e.g., when maxLines changes)
+						// Update and save configuration (e.g., when maxLines or wrap state changes)
 						const currentConfig = this.getLastConfig();
 						const updatedConfig: SerialMonitorConfig = {
 							...(currentConfig || {}),
 							...message.config
 						};
 						this.saveConfig(updatedConfig);
+						break;
+					case 'updateWrapState':
+						// Update wrap state in separate storage
+						this.context.workspaceState.update(this.wrapStateKey, message.lineWrapEnabled);
 						break;
 					default:
 						console.warn('FancyMon: Unknown command:', message.command);
@@ -218,10 +224,15 @@ export class SerialMonitor {
 
 			console.log('FancyMon: Ports:', ports);
 			console.log('FancyMon: Last config:', lastConfig);
+			
+			// Get wrap state from separate storage (default to true if not set)
+			const wrapState = this.context.workspaceState.get<boolean>(this.wrapStateKey) ?? true;
+			
 			this.sendMessage({
 				command: 'portsListed',
 				ports: ports,
-				lastConfig: lastConfig
+				lastConfig: lastConfig,
+				lineWrapEnabled: wrapState
 			});
 		} catch (error: any) {
 			console.error('FancyMon: Error listing ports:', error);

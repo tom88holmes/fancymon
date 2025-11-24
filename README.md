@@ -31,7 +31,7 @@ A powerful and feature-rich serial monitor extension for Visual Studio Code with
 
 ## Requirements
 
-- Visual Studio Code 1.106.0 or higher
+- Visual Studio Code 1.99.0 or higher (compatible with Cursor)
 - A serial port (USB-to-Serial adapter, built-in serial port, etc.)
 
 ## Usage

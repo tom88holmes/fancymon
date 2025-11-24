@@ -111,6 +111,23 @@ export class SerialConnection {
 					return; // Don't report to user
 				}
 				
+				// Check for port access conflicts (another process trying to use the port)
+				// This often happens when ESP-IDF flash tries to access the port
+				const errorMsg = err?.message?.toLowerCase() || '';
+				if (this.isConnected && (
+					errorMsg.includes('access denied') || 
+					errorMsg.includes('cannot open') ||
+					errorMsg.includes('being used by another process') ||
+					errorMsg.includes('permission denied') ||
+					errorMsg.includes('ebusy') ||
+					errorMsg.includes('eacces')
+				)) {
+					console.log('FancyMon: Port access conflict detected (likely ESP-IDF flash), auto-disconnecting...');
+					// Auto-disconnect to allow other process (like ESP-IDF flash) to use the port
+					this.disconnect().catch(e => console.error('FancyMon: Auto-disconnect error:', e));
+					return;
+				}
+				
 				console.error('FancyMon: Serial port error:', err);
 				if (this.isConnected) { // Only process errors if still connected
 					this.callbacks.onError(`Serial port error: ${err?.message || err}`);
@@ -118,18 +135,56 @@ export class SerialConnection {
 			};
 
 			this.closeHandler = () => {
-				console.log('FancyMon: Port closed');
+				console.log('FancyMon: Port closed event received');
 				this.isConnected = false;
-				this.callbacks.onDisconnected();
+				// Don't call onDisconnected here - let disconnect() handle it
+				// This prevents duplicate disconnect messages
 			};
 
 			this.port.on('data', this.dataHandler);
 			this.port.on('error', this.errorHandler);
 			this.port.on('close', this.closeHandler);
 
-			// Open the port (promise-based in v11)
-			await this.port.open();
-			console.log('FancyMon: Port opened successfully');
+			// Open the port with timeout to prevent hanging if port is already in use
+			// Wrap port.open() in a race with a timeout
+			const openTimeout = 3000; // 3 second timeout
+			const openPromise = this.port.open();
+			const timeoutPromise = new Promise((_, reject) => {
+				setTimeout(() => {
+					reject(new Error(`Port open timed out after ${openTimeout}ms. The port may be in use by another application.`));
+				}, openTimeout);
+			});
+			
+			try {
+				await Promise.race([openPromise, timeoutPromise]);
+				console.log('FancyMon: Port opened successfully');
+			} catch (openError: any) {
+				// Clean up the port object if open failed
+				if (this.port) {
+					try {
+						// Try to close if it partially opened
+						if (this.port.isOpen) {
+							await this.port.close();
+						}
+					} catch (closeError) {
+						// Ignore close errors
+					}
+					this.port = null;
+				}
+				
+				// Check for common "port in use" error messages
+				const errorMsg = openError?.message || String(openError);
+				if (errorMsg.includes('Access denied') || 
+				    errorMsg.includes('cannot open') || 
+				    errorMsg.includes('already in use') ||
+				    errorMsg.includes('being used by another process') ||
+				    errorMsg.includes('Permission denied') ||
+				    errorMsg.includes('EBUSY') ||
+				    errorMsg.includes('EACCES')) {
+					throw new Error(`Port ${config.port} is already in use by another application. Please close the other application and try again.`);
+				}
+				throw openError; // Re-throw if it's a different error
+			}
 			
 			// Wait a moment for the port to fully initialize before setting RTS/DTR
 			// Some drivers need time to stabilize after opening
@@ -225,50 +280,131 @@ export class SerialConnection {
 				console.log('FancyMon: Error removing listeners:', removeErr?.message);
 			}
 			
-			// STEP 2: Clear references IMMEDIATELY so data handler checks fail
+			// STEP 2: Clear handler references (but keep port reference until after close)
+			// We need to keep portToClose reference until port is fully closed
 			this.dataHandler = null;
 			this.errorHandler = null;
 			this.closeHandler = null;
-			this.port = null; // Clear this BEFORE pausing so data handler checks fail
-			console.log('FancyMon: All references cleared');
+			// Don't clear this.port yet - we need it for the close operations
+			// It will be cleared after port is fully closed
+			console.log('FancyMon: Handler references cleared');
 			
-			// STEP 3: Try to pause/stop the port (but listeners are already gone)
+			// STEP 3: Reset control lines and flush before closing (helps release port on Windows)
 			try {
 				if (portToClose.isOpen) {
-					if (portToClose.pause) {
-						portToClose.pause();
-						console.log('FancyMon: Port paused');
+					// Reset RTS/DTR to default state before closing
+					try {
+						await Promise.race([
+							portToClose.set({ rts: false, dtr: false }),
+							new Promise((_, reject) => setTimeout(() => reject(new Error('Set timeout')), 50))
+						]);
+						console.log('FancyMon: Control lines reset');
+					} catch (setErr: any) {
+						console.log('FancyMon: Could not reset control lines (port may be closing):', setErr?.message);
+					}
+					
+					// Flush/drain any pending operations
+					try {
+						if (portToClose.flush) {
+							await Promise.race([
+								portToClose.flush(),
+								new Promise((_, reject) => setTimeout(() => reject(new Error('Flush timeout')), 50))
+							]);
+							console.log('FancyMon: Port flushed');
+						}
+					} catch (flushErr: any) {
+						console.log('FancyMon: Could not flush port:', flushErr?.message);
+					}
+					
+					// Pause to stop reading
+					try {
+						if (portToClose.pause) {
+							portToClose.pause();
+							console.log('FancyMon: Port paused');
+						}
+					} catch (pauseErr: any) {
+						console.log('FancyMon: Error pausing port:', pauseErr?.message);
 					}
 				}
-			} catch (pauseErr: any) {
-				console.log('FancyMon: Error pausing port:', pauseErr?.message);
+			} catch (prepErr: any) {
+				console.log('FancyMon: Error preparing port for close:', prepErr?.message);
 			}
 			
-			// STEP 4: Destroy/close the port immediately - don't wait for graceful close
+			// STEP 4: Close and destroy the port - ensure it's fully released
 			try {
 				if (portToClose.isOpen) {
-					console.log('FancyMon: Step 4 - Destroying port immediately...');
-					// Try destroy first (more aggressive, stops everything immediately)
+					console.log('FancyMon: Step 4 - Closing and destroying port to ensure release...');
+					
+					// Try to access and close underlying stream if available
+					// This helps ensure the file handle is released on Windows
+					try {
+						// serialport v11+ may expose the underlying stream
+						const stream = (portToClose as any).stream || (portToClose as any)._stream;
+						if (stream) {
+							try {
+								if (stream.destroy) {
+									stream.destroy();
+									console.log('FancyMon: Underlying stream destroyed');
+								}
+								if (stream.close) {
+									stream.close();
+									console.log('FancyMon: Underlying stream closed');
+								}
+							} catch (streamErr: any) {
+								console.log('FancyMon: Could not close underlying stream:', streamErr?.message);
+							}
+						}
+					} catch (streamAccessErr: any) {
+						console.log('FancyMon: Could not access underlying stream:', streamAccessErr?.message);
+					}
+					
+					// Try to close gracefully first (but with short timeout)
+					let closedGracefully = false;
+					try {
+						await Promise.race([
+							portToClose.close(),
+							new Promise((_, reject) => setTimeout(() => reject(new Error('Close timeout')), 150))
+						]);
+						console.log('FancyMon: Port closed gracefully');
+						closedGracefully = true;
+					} catch (closeErr: any) {
+						console.log('FancyMon: Graceful close failed or timed out:', closeErr?.message);
+					}
+					
+					// ALWAYS call destroy to ensure port handle is released
+					// This is critical on Windows where ports can remain locked
 					try {
 						if (portToClose.destroy) {
-							portToClose.destroy();
-							console.log('FancyMon: Port destroyed immediately');
+							// Call destroy with error to force immediate cleanup
+							portToClose.destroy(new Error('Forced disconnect'));
+							console.log('FancyMon: Port destroyed (ensures handle release)');
 						}
 					} catch (destroyErr: any) {
 						console.log('FancyMon: Error destroying port:', destroyErr?.message);
 					}
 					
-					// Also try close with very short timeout (100ms max)
+					// Wait a moment and verify port is actually closed
+					await new Promise(resolve => setTimeout(resolve, 100));
+					
+					// Check if port is still open and try destroy again if needed
 					try {
-						await Promise.race([
-							portToClose.close(),
-							new Promise((_, reject) => setTimeout(() => reject(new Error('Close timeout')), 100))
-						]);
-						console.log('FancyMon: Port closed');
-					} catch (closeErr: any) {
-						// Ignore close errors - we already tried destroy
-						console.log('FancyMon: Port close skipped (destroy was attempted):', closeErr?.message);
+						if (portToClose.isOpen) {
+							console.log('FancyMon: Port still open after close, forcing destroy...');
+							if (portToClose.destroy) {
+								portToClose.destroy();
+							}
+						} else {
+							console.log('FancyMon: Port confirmed closed');
+						}
+					} catch (checkErr: any) {
+						console.log('FancyMon: Error checking port state:', checkErr?.message);
 					}
+					
+					// Longer delay on Windows to ensure OS has fully released the port handle
+					// Windows serial port drivers can be slow to release file handles
+					// Increased delay to give Windows more time to release the handle
+					await new Promise(resolve => setTimeout(resolve, 500));
+					console.log('FancyMon: Port release delay completed (500ms for OS cleanup)');
 				} else {
 					console.log('FancyMon: Port was already closed');
 				}
@@ -276,8 +412,22 @@ export class SerialConnection {
 				console.error('FancyMon: Error during port cleanup:', err);
 			}
 			
-			// Port reference already cleared above, just finalize disconnect
+			// NOW clear the port reference after all close operations are complete
+			// This ensures we don't hold any references that might prevent GC
+			this.port = null;
+			console.log('FancyMon: Port reference cleared after close operations');
+			
+			// Finalize disconnect
 			console.log('FancyMon: Disconnect complete');
+			
+			// Clear serialport module reference to help with garbage collection
+			// This might help release any lingering references on Windows
+			// Note: We'll reload it on next connect, so this is safe
+			// However, don't clear it if we might reconnect soon, as it helps with performance
+			// Only clear if we're sure we're done (this is a trade-off)
+			// For now, keep it cached for performance, but ensure port is null
+			console.log('FancyMon: Port cleanup complete, port reference is null');
+			
 			this.callbacks.onDisconnected();
 			this.isDisconnecting = false;
 			this.hasSentConnectedMessage = false; // Reset for next connection
