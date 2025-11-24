@@ -72,8 +72,14 @@ export class SerialConnection {
 		// Reset connected message flag for new connection
 		this.hasSentConnectedMessage = false;
 
+		// Store port reference for cleanup in case of failure
+		let portForCleanup: SerialPortType | null = null;
+
 		try {
 			const serialport = await this.getSerialPort();
+			
+			// Create port object - even with autoOpen: false, this might create a handle
+			// So we MUST ensure it's destroyed if connection fails
 			this.port = new serialport.SerialPort({
 				path: config.port,
 				baudRate: config.baudRate,
@@ -82,6 +88,9 @@ export class SerialConnection {
 				parity: config.parity,
 				autoOpen: false
 			});
+			
+			// Store reference for cleanup in case of failure
+			portForCleanup = this.port;
 
 			// Set up event handlers before opening (store references for cleanup)
 			this.shouldProcessData = true; // Reset flag when connecting
@@ -180,7 +189,8 @@ export class SerialConnection {
 				    errorMsg.includes('being used by another process') ||
 				    errorMsg.includes('Permission denied') ||
 				    errorMsg.includes('EBUSY') ||
-				    errorMsg.includes('EACCES')) {
+				    errorMsg.includes('EACCES') ||
+				    errorMsg.includes('failed to open')) {
 					throw new Error(`Port ${config.port} is already in use by another application. Please close the other application and try again.`);
 				}
 				throw openError; // Re-throw if it's a different error
@@ -188,7 +198,44 @@ export class SerialConnection {
 			
 			// Wait a moment for the port to fully initialize before setting RTS/DTR
 			// Some drivers need time to stabilize after opening
-			await new Promise(resolve => setTimeout(resolve, 50));
+			await new Promise(resolve => setTimeout(resolve, 100));
+			
+			// CRITICAL: Verify port is actually open and accessible
+			// If port.open() resolved but port is actually in use, operations will fail
+			if (!this.port) {
+				throw new Error(`Port ${config.port} object is null after opening.`);
+			}
+			
+			// Set up a flag to detect if an error occurs during initialization
+			let initializationFailed = false;
+			const originalErrorHandler = this.errorHandler;
+			const errorCheckTimeout = setTimeout(() => {
+				// After 200ms, if no error occurred, assume port is OK
+				if (originalErrorHandler) {
+					this.errorHandler = originalErrorHandler;
+				}
+			}, 200);
+			
+			// Temporarily replace error handler to catch port-in-use errors
+			this.errorHandler = (err: any) => {
+				const errorMsg = err?.message?.toLowerCase() || '';
+				if (errorMsg.includes('access denied') || 
+				    errorMsg.includes('cannot open') || 
+				    errorMsg.includes('already in use') ||
+				    errorMsg.includes('being used by another process') ||
+				    errorMsg.includes('permission denied') ||
+				    errorMsg.includes('ebusy') ||
+				    errorMsg.includes('eacces')) {
+					clearTimeout(errorCheckTimeout);
+					initializationFailed = true;
+					this.errorHandler = originalErrorHandler;
+					return; // Don't call original handler - we'll throw our own error
+				}
+				// Call original error handler for other errors
+				if (originalErrorHandler) {
+					originalErrorHandler(err);
+				}
+			};
 			
 			// Explicitly set RTS and DTR to false to avoid driving BOOT0/SDA pins
 			// Some devices share BOOT0 with I2C SDA, so we must not drive these pins
@@ -207,11 +254,89 @@ export class SerialConnection {
 				await this.port.set({ rts: false, dtr: false });
 				console.log('FancyMon: RTS and DTR confirmed false (final)');
 			} catch (error: any) {
+				// If error is about port not being open or access denied, treat as connection failure
+				const errorMsg = error?.message?.toLowerCase() || '';
+				if (errorMsg.includes('not open') || 
+				    errorMsg.includes('access denied') || 
+				    errorMsg.includes('cannot open') ||
+				    errorMsg.includes('ebusy') ||
+				    errorMsg.includes('eacces') ||
+				    errorMsg.includes('in use')) {
+					// Clean up port before throwing - CRITICAL: destroy even if never opened
+					const portToDestroy = this.port || portForCleanup;
+					if (portToDestroy) {
+						try {
+							portToDestroy.removeAllListeners();
+						} catch {}
+						try {
+							if (portToDestroy.isOpen) {
+								await portToDestroy.close().catch(() => {});
+							}
+						} catch {}
+						try {
+							if (portToDestroy.destroy) {
+								portToDestroy.destroy();
+							}
+						} catch {}
+						await new Promise(resolve => setTimeout(resolve, 100)); // Wait for OS to release
+					}
+					this.port = null;
+					throw new Error(`Port ${config.port} failed to initialize. It may be in use by another application.`);
+				}
 				console.warn('FancyMon: Warning - could not set RTS/DTR:', error?.message || error);
 				// Continue anyway - connection is still valid, but pins might be driven
 			}
 			
-			// Only mark as connected AFTER RTS/DTR are properly set
+			// Restore original error handler
+			clearTimeout(errorCheckTimeout);
+			this.errorHandler = originalErrorHandler;
+			
+			// Check if initialization failed due to port being in use
+			if (initializationFailed) {
+				// Clean up port before throwing - CRITICAL: destroy even if never opened
+				const portToDestroy = this.port || portForCleanup;
+				if (portToDestroy) {
+					try {
+						portToDestroy.removeAllListeners();
+					} catch {}
+					try {
+						if (portToDestroy.isOpen) {
+							await portToDestroy.close().catch(() => {});
+						}
+					} catch {}
+					try {
+						if (portToDestroy.destroy) {
+							portToDestroy.destroy();
+						}
+					} catch {}
+					await new Promise(resolve => setTimeout(resolve, 100)); // Wait for OS to release
+				}
+				this.port = null;
+				throw new Error(`Port ${config.port} is already in use by another application. Please close the other application and try again.`);
+			}
+			
+			// Wait a bit more to see if any errors occur (port might close if in use)
+			await new Promise(resolve => setTimeout(resolve, 100));
+			
+			// Final check - if port closed or error occurred, fail connection
+			if (!this.port || (this.port.isOpen === false)) {
+				const portToDestroy = this.port || portForCleanup;
+				if (portToDestroy) {
+					try {
+						portToDestroy.removeAllListeners();
+					} catch {}
+					try {
+						if (portToDestroy.destroy) {
+							portToDestroy.destroy();
+						}
+					} catch {}
+					await new Promise(resolve => setTimeout(resolve, 100)); // Wait for OS to release
+				}
+				this.port = null;
+				throw new Error(`Port ${config.port} closed during initialization. It may be in use by another application.`);
+			}
+			
+			// Only mark as connected AFTER RTS/DTR are properly set and port verified open
 			this.isConnected = true;
 			this.callbacks.onConnected();
 			// Send status message only once (prevent duplicates)
@@ -222,9 +347,46 @@ export class SerialConnection {
 		} catch (error: any) {
 			this.callbacks.onError(`Connection error: ${error?.message || error}`);
 			this.isConnected = false;
-			if (this.port) {
-				this.port = null;
+			
+			// CRITICAL: Ensure port is properly cleaned up on connection failure
+			// Even if port was never opened, the SerialPort object might hold a handle
+			const portToCleanup = this.port || portForCleanup;
+			
+			if (portToCleanup) {
+				try {
+					// Remove all listeners first
+					try {
+						portToCleanup.removeAllListeners();
+					} catch {}
+					
+					// Try to close if it's open
+					if (portToCleanup.isOpen) {
+						try {
+							await portToCleanup.close().catch(() => {});
+						} catch {}
+					}
+					
+					// ALWAYS destroy to release resources - even if never opened
+					// This is critical on Windows where handles can remain locked
+					if (portToCleanup.destroy) {
+						try {
+							portToCleanup.destroy();
+						} catch {}
+					}
+					
+					// Wait a moment for OS to release the handle
+					await new Promise(resolve => setTimeout(resolve, 100));
+				} catch (cleanupErr) {
+					// Ignore cleanup errors but log them
+					console.error('FancyMon: Error during port cleanup:', cleanupErr);
+				}
 			}
+			
+			// Clear all references
+			this.port = null;
+			this.dataHandler = null;
+			this.errorHandler = null;
+			this.closeHandler = null;
 		}
 	}
 

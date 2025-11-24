@@ -671,6 +671,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let lastFilterPattern = ''; // Last filter pattern used for rendering
 		let needsFullRender = false; // Flag to force full render (e.g., filter changed, lines trimmed)
 		let pendingScroll = false; // Flag to throttle scroll operations
+		let isProgrammaticScroll = false; // Flag to ignore programmatic scrolls in handler
 
 		// Plotting variables
 		const tabs = document.querySelectorAll('.tab');
@@ -1518,13 +1519,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		function trimOldLines() {
 			// Trim old lines from raw text array
-			// Batch trimming: trim down to maxLines - 50 to avoid trimming on every single line
-			// This means we'll only trim again after 50 more lines are added
-			const trimThreshold = Math.max(100, Math.floor(maxLines * 0.1)); // Trim threshold: 10% of maxLines or 100, whichever is larger
-			const targetSize = maxLines - trimThreshold;
-			
+			// Trim down to exactly maxLines, removing everything over the limit
+			// This is called occasionally (every 100 lines) to avoid constant trimming
 			if (rawLines.length > maxLines) {
-				const linesToRemove = rawLines.length - targetSize;
+				const linesToRemove = rawLines.length - maxLines;
 				
 				// Remove old lines from the start
 				rawLines.splice(0, linesToRemove);
@@ -1553,6 +1551,25 @@ export function getWebviewContentHtml(cspSource: string): string {
 					if (lastRenderedLineIndex >= 0) {
 						lastRenderedLineIndex = Math.max(-1, lastRenderedLineIndex - linesToRemove);
 					}
+					
+					// CRITICAL: Scroll to bottom after trimming to maintain auto-follow
+					// When lines are removed from the top, scroll position can shift
+					if (!pendingScroll) {
+						pendingScroll = true;
+						isProgrammaticScroll = true; // Mark as programmatic scroll
+						requestAnimationFrame(() => {
+							if (monitor && isFollowing) {
+								const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+								lastScrollTop = newScrollTop; // Update BEFORE scrolling to prevent handler from thinking we scrolled up
+								monitor.scrollTop = newScrollTop;
+								// Reset flag after a short delay to allow scroll event to process
+								setTimeout(() => {
+									isProgrammaticScroll = false;
+								}, 50);
+							}
+							pendingScroll = false;
+						});
+					}
 				}
 				
 				// Don't force full render - incremental removal is much faster
@@ -1560,9 +1577,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		function updateLineUsage() {
-			const percent = maxLines > 0 ? Math.round((lineCount / maxLines) * 100) : 0;
+			// Cap percentage at 100% for display, even if buffer exceeds maxLines
+			// This keeps the display stable and consistent
+			const displayCount = Math.min(lineCount, maxLines);
+			const percent = maxLines > 0 ? Math.round((displayCount / maxLines) * 100) : 0;
 			const color = percent > 90 ? 'var(--vscode-errorForeground)' : percent > 70 ? 'var(--vscode-warningForeground)' : 'var(--vscode-descriptionForeground)';
-			lineUsage.textContent = percent + '% (' + lineCount.toLocaleString() + ' / ' + maxLines.toLocaleString() + ')';
+			// Always show maxLines as the max, even if we have more lines buffered
+			lineUsage.textContent = percent + '% (' + displayCount.toLocaleString() + ' / ' + maxLines.toLocaleString() + ')';
 			lineUsage.style.color = color;
 		}
 
@@ -1615,9 +1636,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 			}
 			
-			// Trim old lines if we exceed max
-			// Only trim when significantly over limit to reduce frequency of trimming operations
-			if (lineCount > maxLines) {
+			// Trim old lines occasionally if we exceed max
+			// Only trim every 100 lines when over limit to avoid constant trimming
+			// This allows buffer to grow past maxLines and keeps usage display stable at 100%
+			if (lineCount > maxLines && lineCount % 100 === 0) {
 				const linesTrimmed = rawLines.length - maxLines;
 				trimOldLines();
 				// Don't force full render - trimOldLines() handles incremental DOM removal
@@ -1629,8 +1651,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Update usage - throttle to avoid excessive DOM updates
-			// Only update every 10 lines or when significantly over limit
-			if (linesAdded > 0 && (lineCount % 10 === 0 || lineCount > maxLines * 0.95)) {
+			// Update every 10 lines, or every 50 lines when over limit (less frequent updates when over)
+			if (linesAdded > 0 && (lineCount % 10 === 0 || (lineCount > maxLines && lineCount % 50 === 0))) {
 				updateLineUsage();
 			}
 			
@@ -1759,10 +1781,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// This prevents blocking if multiple batches arrive quickly
 			if (!pendingScroll) {
 				pendingScroll = true;
+				isProgrammaticScroll = true; // Mark as programmatic scroll
 				requestAnimationFrame(() => {
 					if (monitor && isFollowing) {
-						monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
-						lastScrollTop = monitor.scrollTop;
+						const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+						lastScrollTop = newScrollTop; // Update BEFORE scrolling to prevent handler from thinking we scrolled up
+						monitor.scrollTop = newScrollTop;
+						// Reset flag after a short delay to allow scroll event to process
+						setTimeout(() => {
+							isProgrammaticScroll = false;
+						}, 50);
 					}
 					pendingScroll = false;
 				});
@@ -1791,10 +1819,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Scroll to bottom if following - use throttled scroll
 			if (isFollowing && !pendingScroll) {
 				pendingScroll = true;
+				isProgrammaticScroll = true; // Mark as programmatic scroll
 				requestAnimationFrame(() => {
 					if (monitor && isFollowing) {
-						monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
-						lastScrollTop = monitor.scrollTop;
+						const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+						lastScrollTop = newScrollTop; // Update BEFORE scrolling
+						monitor.scrollTop = newScrollTop;
+						setTimeout(() => {
+							isProgrammaticScroll = false;
+						}, 50);
 					}
 					pendingScroll = false;
 				});
@@ -1879,17 +1912,22 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Restore scroll position based on follow state
 			if (shouldStickToBottom) {
-				// Scroll to bottom - use throttled scroll for better performance
-				if (!pendingScroll) {
-					pendingScroll = true;
-					requestAnimationFrame(() => {
-						if (monitor && isFollowing) {
-							monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
-							lastScrollTop = monitor.scrollTop;
-						}
-						pendingScroll = false;
-					});
-				}
+			// Scroll to bottom - use throttled scroll for better performance
+			if (!pendingScroll) {
+				pendingScroll = true;
+				isProgrammaticScroll = true; // Mark as programmatic scroll
+				requestAnimationFrame(() => {
+					if (monitor && isFollowing) {
+						const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+						lastScrollTop = newScrollTop; // Update BEFORE scrolling
+						monitor.scrollTop = newScrollTop;
+						setTimeout(() => {
+							isProgrammaticScroll = false;
+						}, 50);
+					}
+					pendingScroll = false;
+				});
+			}
 			} else {
 				let restored = false;
 				
@@ -1946,6 +1984,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			try {
 				function handleScroll() {
 					if (!monitor) return;
+					
+					// Ignore programmatic scrolls - they're from us maintaining auto-follow
+					if (isProgrammaticScroll) {
+						return;
+					}
+					
 					const currentScrollTop = monitor.scrollTop;
 					const scrolledUp = currentScrollTop < lastScrollTop;
 					const nearBottom = isAtBottom();
@@ -2604,21 +2648,31 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 			// Handle window resize to ensure monitor fills available space
 			const resizeObserver = new ResizeObserver(() => {
-				// If following, scroll to bottom after resize
-				if (isFollowing && monitor) {
-					monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
-					lastScrollTop = monitor.scrollTop;
-				}
+			// If following, scroll to bottom after resize
+			if (isFollowing && monitor) {
+				isProgrammaticScroll = true;
+				const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+				lastScrollTop = newScrollTop;
+				monitor.scrollTop = newScrollTop;
+				setTimeout(() => {
+					isProgrammaticScroll = false;
+				}, 50);
+			}
 			});
 			resizeObserver.observe(document.body);
 
 			// Also listen to window resize events
 			window.addEventListener('resize', () => {
-				// If following, scroll to bottom after resize
-				if (isFollowing && monitor) {
-					monitor.scrollTop = monitor.scrollHeight - monitor.clientHeight;
-					lastScrollTop = monitor.scrollTop;
-				}
+			// If following, scroll to bottom after resize
+			if (isFollowing && monitor) {
+				isProgrammaticScroll = true;
+				const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+				lastScrollTop = newScrollTop;
+				monitor.scrollTop = newScrollTop;
+				setTimeout(() => {
+					isProgrammaticScroll = false;
+				}, 50);
+			}
 			});
 		}
 
