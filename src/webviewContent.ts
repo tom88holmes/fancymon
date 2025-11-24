@@ -796,7 +796,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Remove ANSI codes first
 			const plainText = stripAnsiCodes(text);
 			// Match numbers (integers and decimals) - use RegExp constructor to avoid template literal issues
-			const numberRegex = new RegExp('(-?\\\\d+\\\\.?\\\\d*)', 'g');
+			const numberRegex = new RegExp('(-?\\d+\\.?\\d*)', 'g');
 			const matches = [];
 			let match;
 			while ((match = numberRegex.exec(plainText)) !== null) {
@@ -889,11 +889,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const targetNumber = numbers[numberIndex - 1];
 			const beforeNumber = text.substring(0, targetNumber.position).trim();
 			// Extract last word or meaningful text before the number
-			const words = beforeNumber.split(/[\\s\\W]+/).filter(w => w.length > 0);
+			const words = beforeNumber.split(new RegExp('[\\s\\W]+', 'g')).filter(w => w.length > 0);
 			if (words.length > 0) {
 				const lastWord = words[words.length - 1];
 				// Clean up the word
-				const cleanWord = lastWord.replace(/[^a-zA-Z0-9]/g, '');
+				const cleanWord = lastWord.replace(new RegExp('[^a-zA-Z0-9]', 'g'), '');
 				if (cleanWord.length > 0) {
 					return cleanWord + ':' + numberIndex;
 				}
@@ -1295,6 +1295,19 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const div = document.createElement('div');
 			div.textContent = text;
 			return div.innerHTML;
+		}
+		
+		function escapeHtmlAttribute(text) {
+			// Escape for HTML attribute values - handles quotes, newlines, etc.
+			return String(text)
+				.replace(new RegExp('&', 'g'), '&amp;')
+				.replace(new RegExp('"', 'g'), '&quot;')
+				.replace(new RegExp("'", 'g'), '&#39;')
+				.replace(new RegExp('<', 'g'), '&lt;')
+				.replace(new RegExp('>', 'g'), '&gt;')
+				.replace(new RegExp('\\r', 'g'), '&#13;')
+				.replace(new RegExp('\\n', 'g'), '&#10;')
+				.replace(new RegExp('\\t', 'g'), '&#9;');
 		}
 
 		function getAnsiClasses(state) {
@@ -1745,7 +1758,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const plainText = stripAnsiCodes(textForDisplay);
 				
 				// Escape HTML in plainText for data attribute
-				const escapedPlainText = plainText.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+				const escapedPlainText = escapeHtmlAttribute(plainText);
 				
 				// Build HTML string directly (much faster than DOM operations)
 				html += '<div class="line" data-line="' + (totalTrimmedLines + idx + 1) + '" data-text="' + escapedPlainText + '">' + 
@@ -1894,7 +1907,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const result = parseAnsi(textForDisplay, state);
 				const plainText = stripAnsiCodes(textForDisplay);
 				if (entry.lineNumber !== null && entry.lineNumber !== undefined) {
-					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtml(plainText) + '">' + result.html + '</div>';
+					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtmlAttribute(plainText) + '">' + result.html + '</div>';
 				} else {
 					html += '<div class="line line-buffer">' + result.html + '</div>';
 				}
@@ -2048,6 +2061,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Right-click context menu for lines
 			let contextMenu = null;
 			let selectedLineElement = null;
+			let selectedText = ''; // Store the actual text selection
 			
 			// Create context menu element
 			function createContextMenu() {
@@ -2055,10 +2069,57 @@ export function getWebviewContentHtml(cspSource: string): string {
 				contextMenu = document.createElement('div');
 				contextMenu.className = 'context-menu';
 				contextMenu.id = 'contextMenu';
-				const menuItem = document.createElement('div');
-				menuItem.className = 'context-menu-item';
-				menuItem.textContent = 'Add selected line to plot';
-				menuItem.addEventListener('click', () => {
+				
+				// Copy menu item
+				const copyMenuItem = document.createElement('div');
+				copyMenuItem.className = 'context-menu-item';
+				copyMenuItem.textContent = 'Copy';
+				copyMenuItem.addEventListener('click', () => {
+					let textToCopy = '';
+					
+					// First, try to get the selected text (if user highlighted something)
+					if (selectedText && selectedText.trim().length > 0) {
+						textToCopy = selectedText;
+					} else if (selectedLineElement) {
+						// Fall back to the entire line if no selection
+						const lineText = selectedLineElement.getAttribute('data-text');
+						if (lineText) {
+							textToCopy = lineText;
+						}
+					}
+					
+					if (textToCopy) {
+						// Strip ANSI codes before copying
+						const plainText = stripAnsiCodes(textToCopy);
+						copyToClipboard(plainText);
+					}
+					hideContextMenu();
+				});
+				contextMenu.appendChild(copyMenuItem);
+				
+				// Copy All menu item
+				const copyAllMenuItem = document.createElement('div');
+				copyAllMenuItem.className = 'context-menu-item';
+				copyAllMenuItem.textContent = 'Copy All';
+				copyAllMenuItem.addEventListener('click', () => {
+					// Copy all raw lines (remove ANSI codes)
+					const allContent = rawLines.join('') + (lineBuffer || '');
+					const content = stripAnsiCodes(allContent);
+					
+					if (content.trim().length === 0) {
+						vscode.postMessage({ command: 'error', message: 'No data to copy' });
+					} else {
+						copyToClipboard(content);
+					}
+					hideContextMenu();
+				});
+				contextMenu.appendChild(copyAllMenuItem);
+				
+				// Add to plot menu item
+				const plotMenuItem = document.createElement('div');
+				plotMenuItem.className = 'context-menu-item';
+				plotMenuItem.textContent = 'Add selected line to plot';
+				plotMenuItem.addEventListener('click', () => {
 					if (selectedLineElement) {
 						const lineText = selectedLineElement.getAttribute('data-text');
 						if (lineText && patternInput) {
@@ -2072,7 +2133,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					}
 					hideContextMenu();
 				});
-				contextMenu.appendChild(menuItem);
+				contextMenu.appendChild(plotMenuItem);
+				
 				document.body.appendChild(contextMenu);
 				return contextMenu;
 			}
@@ -2080,6 +2142,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 			function showContextMenu(x, y, lineElement) {
 				const menu = createContextMenu();
 				selectedLineElement = lineElement;
+				
+				// Capture the current text selection
+				const selection = window.getSelection();
+				if (selection && selection.toString().trim().length > 0) {
+					selectedText = selection.toString();
+				} else {
+					selectedText = '';
+				}
+				
 				menu.style.display = 'block';
 				menu.style.left = x + 'px';
 				menu.style.top = y + 'px';
@@ -2089,6 +2160,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				if (contextMenu) {
 					contextMenu.style.display = 'none';
 					selectedLineElement = null;
+					selectedText = '';
 				}
 			}
 			
@@ -2128,9 +2200,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 		// Connect/Disconnect toggle button
 		if (connectToggleBtn) {
 			connectToggleBtn.addEventListener('click', () => {
+				console.log('FancyMon: Connect button clicked! isConnected:', isConnected);
 				if (isConnected) {
 					// Disconnect
+					console.log('FancyMon: Disconnecting...');
 					if (isDisconnecting) {
+						console.log('FancyMon: Already disconnecting, ignoring click');
 						return; // Prevent multiple clicks
 					}
 					isDisconnecting = true;
@@ -2138,22 +2213,27 @@ export function getWebviewContentHtml(cspSource: string): string {
 					vscode.postMessage({ command: 'disconnect' });
 				} else {
 					// Connect
+					console.log('FancyMon: Connect button clicked - preparing to connect...');
 					if (!portSelect.value) {
+						console.log('FancyMon: No port selected!');
 						setStatus('Please select a port', 'error');
 						return;
 					}
 					
+					const config = {
+						port: portSelect.value,
+						baudRate: getBaudRate(),
+						dataBits: parseInt(dataBits.value),
+						stopBits: parseInt(stopBits.value),
+						parity: parity.value,
+						maxLines: maxLines
+					};
+					console.log('FancyMon: Sending connect message with config:', JSON.stringify(config));
 					vscode.postMessage({
 						command: 'connect',
-						config: {
-							port: portSelect.value,
-							baudRate: getBaudRate(),
-							dataBits: parseInt(dataBits.value),
-							stopBits: parseInt(stopBits.value),
-							parity: parity.value,
-							maxLines: maxLines
-						}
+						config: config
 					});
+					console.log('FancyMon: Connect message sent!');
 				}
 			});
 		}
@@ -2426,7 +2506,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			window.addEventListener('message', function(event) {
 				try {
 					const message = event.data;
-					if (message?.command !== 'data') {
+					// Log ALL messages except 'data' (too verbose) and 'debug' (we handle it)
+					if (message?.command !== 'data' && message?.command !== 'debug') {
 						console.log('FancyMon: Received message:', message ? message.command : 'null', message);
 					}
 					
@@ -2436,6 +2517,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 					}
 					
 					switch (message.command) {
+				case 'debug':
+					// Forward debug logs to console
+					if (message.message) {
+						console.log('FancyMon [EXT]: ' + message.message);
+					}
+					break;
 				case 'portsListed':
 					console.log('FancyMon: Received ports list:', message.ports);
 					console.log('FancyMon: Last config:', message.lastConfig);
@@ -2524,11 +2611,20 @@ export function getWebviewContentHtml(cspSource: string): string {
 							// Auto-connect if we have a valid configuration
 							if (shouldAutoConnect && config.port && config.baudRate) {
 								console.log('FancyMon: Auto-connecting with restored configuration...');
+								console.log('FancyMon: Auto-connect config:', JSON.stringify(config));
+								console.log('FancyMon: connectToggleBtn exists:', !!connectToggleBtn);
 								setTimeout(() => {
+									console.log('FancyMon: Auto-connect timeout fired, clicking connect button...');
 									if (connectToggleBtn) {
+										console.log('FancyMon: About to click connectToggleBtn...');
 										connectToggleBtn.click();
+										console.log('FancyMon: connectToggleBtn.click() called!');
+									} else {
+										console.error('FancyMon: connectToggleBtn is null in timeout!');
 									}
 								}, 100); // Small delay to ensure UI is updated
+							} else {
+								console.log('FancyMon: Not auto-connecting. shouldAutoConnect:', shouldAutoConnect, 'port:', config.port, 'baudRate:', config.baudRate);
 							}
 						}
 					} else {
@@ -2558,6 +2654,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					break;
 					
 				case 'connected':
+					console.log('FancyMon: Received connected message!');
 					isConnected = true;
 					isDisconnecting = false;
 					setStatus('Connected to ' + portSelect.value, 'connected');
@@ -2605,6 +2702,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					
 				case 'error':
 					// Reset connection state on error (connection failed)
+					console.log('FancyMon: Received error message:', message.message);
+					console.log('FancyMon: Error message details:', JSON.stringify(message));
 					isConnected = false;
 					isDisconnecting = false;
 					setStatus(message.message, 'error');

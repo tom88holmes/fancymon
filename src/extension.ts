@@ -5,7 +5,6 @@ let SerialMonitorClass: any = null;
 let serialMonitor: any = undefined;
 
 // Log immediately when module loads (before activate)
-console.error('FancyMon: Module file is being loaded!');
 console.log('FancyMon: Module file is being loaded!');
 
 export function activate(context: vscode.ExtensionContext) {
@@ -79,6 +78,10 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
+	// Track if we disconnected due to ESP-IDF task and need to reconnect
+	let disconnectedForIdfTask = false;
+	let lastConfigBeforeDisconnect: any = null;
+
 	// Auto-detect ESP-IDF flash/build tasks and disconnect
 	const taskStartDisposable = vscode.tasks.onDidStartTask(async (event) => {
 		const taskName = event.execution.task.name?.toLowerCase() || '';
@@ -90,13 +93,67 @@ export function activate(context: vscode.ExtensionContext) {
 		                  taskName.includes('flash') || 
 		                  taskName.includes('build and flash') ||
 		                  taskName.includes('idf') ||
-		                  taskCommand.includes('idf.py') && (taskCommand.includes('flash') || taskCommand.includes('build'));
+		                  (taskCommand.includes('idf.py') && (taskCommand.includes('flash') || taskCommand.includes('build')));
+		
+		// Also check for ESP-IDF monitor task starting
+		const isIdfMonitorTask = taskType === 'idf' && taskName.includes('monitor') ||
+		                         taskCommand.includes('idf.py') && taskCommand.includes('monitor');
 		
 		if (isIdfTask) {
 			console.log('FancyMon: ESP-IDF flash/build task detected, auto-disconnecting...');
 			if (serialMonitor && serialMonitor.connection && serialMonitor.connection.connected) {
+				// Save the current config before disconnecting
+				if (serialMonitor.getLastConfig) {
+					lastConfigBeforeDisconnect = serialMonitor.getLastConfig();
+				}
 				await serialMonitor.disconnect();
-				console.log('FancyMon: Auto-disconnected for ESP-IDF task');
+				disconnectedForIdfTask = true;
+				console.log('FancyMon: Auto-disconnected for ESP-IDF task, will reconnect when task completes');
+			}
+		} else if (isIdfMonitorTask && disconnectedForIdfTask) {
+			// ESP-IDF monitor is trying to start - reconnect first to block it
+			console.log('FancyMon: ESP-IDF monitor task detected, reconnecting to block it...');
+			if (serialMonitor && lastConfigBeforeDisconnect) {
+				try {
+					await serialMonitor.connect(lastConfigBeforeDisconnect);
+					disconnectedForIdfTask = false;
+					lastConfigBeforeDisconnect = null;
+					console.log('FancyMon: Reconnected before ESP-IDF monitor could start');
+				} catch (error: any) {
+					console.error('FancyMon: Failed to reconnect before ESP-IDF monitor:', error);
+				}
+			}
+		}
+	});
+
+	// Auto-reconnect when ESP-IDF tasks finish
+	const taskEndDisposable = vscode.tasks.onDidEndTask(async (event) => {
+		const taskName = event.execution.task.name?.toLowerCase() || '';
+		const taskType = event.execution.task.definition?.type || '';
+		const taskCommand = event.execution.task.definition?.command || '';
+		
+		// Check if it was an ESP-IDF flash/build task
+		const wasIdfTask = taskType === 'idf' || 
+		                   taskName.includes('flash') || 
+		                   taskName.includes('build and flash') ||
+		                   taskName.includes('idf') ||
+		                   (taskCommand.includes('idf.py') && (taskCommand.includes('flash') || taskCommand.includes('build')));
+		
+		if (wasIdfTask && disconnectedForIdfTask && lastConfigBeforeDisconnect) {
+			console.log('FancyMon: ESP-IDF task completed, auto-reconnecting...');
+			// Wait a moment for the port to be fully released
+			await new Promise(resolve => setTimeout(resolve, 500));
+			
+			if (serialMonitor && !serialMonitor.connection.connected) {
+				try {
+					await serialMonitor.connect(lastConfigBeforeDisconnect);
+					disconnectedForIdfTask = false;
+					lastConfigBeforeDisconnect = null;
+					console.log('FancyMon: Auto-reconnected after ESP-IDF task completion');
+				} catch (error: any) {
+					console.error('FancyMon: Failed to auto-reconnect after ESP-IDF task:', error);
+					// Keep the flag set so we can try again if another task completes
+				}
 			}
 		}
 	});
@@ -105,6 +162,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(testDisposable);
 	context.subscriptions.push(disconnectDisposable);
 	context.subscriptions.push(taskStartDisposable);
+	context.subscriptions.push(taskEndDisposable);
 	
 	console.log('=== FancyMon commands registered successfully ===');
 	console.log('Registered commands:', vscode.commands.getCommands().then(cmds => {

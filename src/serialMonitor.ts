@@ -48,6 +48,9 @@ export class SerialMonitor {
 					pendingChunks: info.pendingChunks,
 					elapsedMs: info.elapsedMs
 				});
+			},
+			onDebug: (message: string) => {
+				this.sendMessage({ command: 'debug', message });
 			}
 		};
 		this.connection = new SerialConnection(callbacks);
@@ -132,6 +135,9 @@ export class SerialMonitor {
 							await this.listPorts();
 							break;
 					case 'connect':
+						console.log('FancyMon: Received connect command from webview!');
+						console.log('FancyMon: Connect config:', JSON.stringify(message.config));
+						vscode.window.showInformationMessage(`FancyMon: Connect command received! Port: ${message.config?.port || 'unknown'}`).then(() => {});
 						await this.connect(message.config);
 						break;
 					case 'disconnect':
@@ -195,7 +201,7 @@ export class SerialMonitor {
 		}
 	}
 
-	private getLastConfig(): SerialMonitorConfig | null {
+	public getLastConfig(): SerialMonitorConfig | null {
 		const saved = this.context.workspaceState.get<SerialMonitorConfig>(this.configKey);
 		return saved || null;
 	}
@@ -245,10 +251,21 @@ export class SerialMonitor {
 		}
 	}
 
-	private async connect(config: SerialMonitorConfig): Promise<void> {
+	public async connect(config: SerialMonitorConfig): Promise<void> {
+		console.log('FancyMon: SerialMonitor.connect() called with config:', JSON.stringify(config));
+		vscode.window.showInformationMessage(`FancyMon: SerialMonitor.connect() called! Port: ${config.port}`).then(() => {});
 		// Save the configuration for next time
 		this.saveConfig(config);
-		await this.connection.connect(config);
+		console.log('FancyMon: SerialMonitor calling connection.connect()...');
+		try {
+			await this.connection.connect(config);
+			console.log('FancyMon: SerialMonitor connection.connect() completed');
+			vscode.window.showInformationMessage(`FancyMon: Connection successful!`).then(() => {});
+		} catch (error: any) {
+			console.error('FancyMon: SerialMonitor connection.connect() FAILED:', error);
+			vscode.window.showErrorMessage(`FancyMon: Connection failed: ${error?.message || error}`).then(() => {});
+			throw error;
+		}
 	}
 
 	public async disconnect(): Promise<void> {
