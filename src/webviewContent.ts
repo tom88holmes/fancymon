@@ -250,8 +250,88 @@ export function getWebviewContentHtml(cspSource: string): string {
 			margin-top: 10px;
 		}
 
+		.send-input-wrapper {
+			flex: 1;
+			position: relative;
+			display: flex;
+			z-index: 1001;
+		}
+
 		.send-area input {
 			flex: 1;
+			border-left: none;
+			border-radius: 0 2px 2px 0;
+		}
+
+		.history-btn {
+			width: 30px;
+			padding: 0;
+			font-size: 12px;
+			border-right: none;
+			border-radius: 2px 0 0 2px;
+			cursor: pointer;
+			background-color: var(--vscode-input-background);
+			color: var(--vscode-foreground);
+			border: 1px solid var(--vscode-input-border);
+			border-right: none;
+		}
+
+		.history-btn:hover:not(:disabled) {
+			background-color: var(--vscode-list-hoverBackground);
+		}
+
+		.history-btn:disabled {
+			opacity: 0.5;
+			cursor: not-allowed;
+		}
+
+		.history-dropdown {
+			position: absolute;
+			bottom: 100%;
+			left: 0;
+			width: 100%;
+			height: 300px;
+			max-height: 300px;
+			overflow-y: auto;
+			overflow-x: hidden;
+			background-color: var(--vscode-dropdown-background);
+			border: 1px solid var(--vscode-dropdown-border);
+			border-radius: 2px;
+			box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
+			z-index: 1000;
+			margin-bottom: 2px;
+		}
+
+		.history-item {
+			padding: 6px 10px;
+			cursor: pointer;
+			border-bottom: 1px solid var(--vscode-dropdown-border);
+			font-size: 12px;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			display: block;
+			min-height: 24px;
+		}
+
+		.history-item:hover {
+			background-color: var(--vscode-list-hoverBackground);
+		}
+
+		.history-item:last-child {
+			border-bottom: none;
+		}
+
+		.history-item.empty {
+			padding: 10px;
+			text-align: center;
+			color: var(--vscode-descriptionForeground);
+			cursor: default;
+		}
+
+		.history-item.selected {
+			background-color: var(--vscode-list-activeSelectionBackground);
+			color: var(--vscode-list-activeSelectionForeground);
 		}
 
 		.status {
@@ -530,8 +610,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 	<div class="controls-row">
 		<div class="control-group" style="flex: 1;">
-			<label>Filter:</label>
-			<input type="text" id="filterInput" placeholder="Type pattern to filter lines..." style="flex: 1; min-width: 200px;">
+			<label>Include:</label>
+			<input type="text" id="filterInput" placeholder="Comma-separated patterns to include..." style="flex: 1; min-width: 200px;">
+		</div>
+		<div class="control-group" style="flex: 1;">
+			<label>Exclude:</label>
+			<input type="text" id="excludeFilterInput" placeholder="Comma-separated patterns to exclude..." style="flex: 1; min-width: 200px;">
 		</div>
 	</div>
 
@@ -540,7 +624,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 	</div>
 
 	<div class="send-area">
-		<input type="text" id="sendInput" placeholder="Type message to send..." disabled>
+		<div class="send-input-wrapper">
+			<button id="historyBtn" class="history-btn" disabled title="Message history">▼</button>
+			<input type="text" id="sendInput" placeholder="Type message to send..." disabled>
+			<div id="historyDropdown" class="history-dropdown" style="display: none;"></div>
+		</div>
 		<button id="sendBtn" disabled>Send</button>
 	</div>
 
@@ -641,6 +729,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const toggleWrapBtn = document.getElementById('toggleWrapBtn');
 		const sendInput = document.getElementById('sendInput');
 		const sendBtn = document.getElementById('sendBtn');
+		const historyBtn = document.getElementById('historyBtn');
+		const historyDropdown = document.getElementById('historyDropdown');
 		const refreshPorts = document.getElementById('refreshPorts');
 		// status already declared above
 		const maxLinesInput = document.getElementById('maxLines');
@@ -651,11 +741,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const copyVisibleBtn = document.getElementById('copyVisibleBtn');
 		const scrollbarIndicator = document.getElementById('scrollbarIndicator');
 		const filterInput = document.getElementById('filterInput');
+		const excludeFilterInput = document.getElementById('excludeFilterInput');
 		
 		let maxLines = 10000;
 		let lineCount = 0;
 		let totalTrimmedLines = 0;
 		let isFrozenView = false;
+		
+		// Message history (most recent first, max 30 items)
+		let messageHistory = [];
+		const MAX_HISTORY = 30;
+		let selectedHistoryIndex = -1; // Track selected item for keyboard navigation
 		let frozenAnchorLine = null;
 		let frozenAnchorOffset = 0;
 		let anchorLostScrollTop = null; // Track scroll position when anchor was lost
@@ -663,7 +759,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 		
 		// Raw text storage - stores lines as strings with ANSI codes preserved
 		let rawLines = [];
-		let filterPattern = ''; // Filter pattern for dynamic filtering
+		let filterPattern = ''; // Include filter pattern for dynamic filtering
+		let excludeFilterPattern = ''; // Exclude filter pattern for dynamic filtering
+		let lastExcludeFilterPattern = ''; // Last exclude filter pattern used for rendering
 		const newlineChar = String.fromCharCode(10);
 		
 		// Performance optimization: track rendering state
@@ -795,18 +893,46 @@ export function getWebviewContentHtml(cspSource: string): string {
 		function extractNumbers(text) {
 			// Remove ANSI codes first
 			const plainText = stripAnsiCodes(text);
+			console.log('FancyMon: extractNumbers - plainText:', plainText, 'length:', plainText.length);
 			// Match numbers (integers and decimals) - use RegExp constructor to avoid template literal issues
-			const numberRegex = new RegExp('(-?\\d+\\.?\\d*)', 'g');
+			// Match: optional minus, digits, optional decimal point and more digits
+			// Need quadruple backslashes because we're inside a template literal
+			// The string '(-?\\\\d+(?:\\\\.\\\\d+)?)' becomes '(-?\\d+(?:\\.\\d+)?)' which is correct
+			const numberRegex = new RegExp('(-?\\\\d+(?:\\\\.\\\\d+)?)', 'g');
+			console.log('FancyMon: extractNumbers - regex pattern:', numberRegex.toString());
 			const matches = [];
 			let match;
+			let execCount = 0;
 			while ((match = numberRegex.exec(plainText)) !== null) {
-				matches.push({
-					index: matches.length + 1,
-					value: parseFloat(match[1]),
-					text: match[1],
-					position: match.index
-				});
+				execCount++;
+				console.log('FancyMon: extractNumbers - match found:', match, 'at index:', match.index);
+				const numberText = match[1];
+				const numberValue = parseFloat(numberText);
+				console.log('FancyMon: extractNumbers - numberText:', numberText, 'parsed:', numberValue, 'isNaN:', isNaN(numberValue), 'isFinite:', isFinite(numberValue));
+				// Validate it's actually a valid number (not NaN and finite)
+				if (!isNaN(numberValue) && isFinite(numberValue) && numberText.length > 0) {
+					// Additional validation: ensure the matched text only contains digits, minus, and decimal point
+					// Need quadruple backslashes because we're inside a template literal
+					const validNumberRegex = new RegExp('^-?\\\\d+(\\\\.\\\\d+)?$');
+					const isValid = validNumberRegex.test(numberText);
+					console.log('FancyMon: extractNumbers - validation regex test:', isValid, 'for:', numberText);
+					if (isValid) {
+						matches.push({
+							index: matches.length + 1,
+							value: numberValue,
+							text: numberText,
+							position: match.index
+						});
+						console.log('FancyMon: extractNumbers - added match:', matches[matches.length - 1]);
+					}
+				}
+				// Safety check to prevent infinite loops
+				if (execCount > 1000) {
+					console.error('FancyMon: extractNumbers - too many iterations, breaking');
+					break;
+				}
 			}
+			console.log('FancyMon: extractNumbers - total exec count:', execCount, 'found:', matches.length, 'matches:', matches);
 			return matches;
 		}
 
@@ -907,7 +1033,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			const text = patternInput.value;
 			const plainText = stripAnsiCodes(text);
-			let allNumbers = extractNumbers(text);
 			
 			// Extract time value and find its position if time pattern is set
 			let timeValue = null;
@@ -916,24 +1041,64 @@ export function getWebviewContentHtml(cspSource: string): string {
 				try {
 					const timePattern = timePatternInput.value.trim();
 					if (timePattern) {
+						console.log('FancyMon: Time pattern:', timePattern);
 						const regex = new RegExp(timePattern);
 						const match = regex.exec(plainText);
+						console.log('FancyMon: Time match:', match, 'on text:', plainText);
 						if (match) {
-							if (match[1]) {
-								timeValue = parseFloat(match[1]);
+							// Use the first capture group if available, otherwise use the full match
+							// For pattern like \(([0-9]+)\), match[1] is the digits
+							// For pattern like (([0-9]+)), match[1] is the outer group, match[2] is the digits
+							let capturedValue = null;
+							if (match[2]) {
+								// Pattern has nested groups, use the inner one (the digits)
+								capturedValue = match[2];
+							} else if (match[1]) {
+								// Pattern has one capture group
+								capturedValue = match[1];
+							} else {
+								// No capture group, use full match
+								capturedValue = match[0];
 							}
+							
+							timeValue = parseFloat(capturedValue);
 							// Get the end position of the entire match (not just capture group)
 							timeMatchEnd = match.index + match[0].length;
+							console.log('FancyMon: Time match at index', match.index, 'length', match[0].length, 'end position:', timeMatchEnd);
+							console.log('FancyMon: Full match:', match[0], 'Capture groups:', Array.from(match).slice(1));
+							console.log('FancyMon: Using value:', capturedValue, 'parsed as:', timeValue);
+							console.log('FancyMon: Text before time:', plainText.substring(0, timeMatchEnd));
+							console.log('FancyMon: Text after time:', plainText.substring(timeMatchEnd));
+						} else {
+							console.log('FancyMon: Time pattern did not match! Pattern:', timePattern, 'Text:', plainText);
+							console.log('FancyMon: Hint - if matching parentheses, use \\( and \\) to escape them');
 						}
 					}
 				} catch (e) {
-					// Ignore errors
+					console.error('FancyMon: Error matching time pattern:', e);
 				}
 			}
 			
+			// Extract numbers - pass plainText to ensure positions match
+			// extractNumbers strips ANSI codes internally, but we need to pass the already-stripped text
+			// to ensure positions are consistent. However, extractNumbers expects the original text.
+			// So we'll extract numbers and then verify positions match plainText
+			let allNumbers = extractNumbers(text);
+			
+			// Verify positions are correct by checking against plainText
+			// If extractNumbers used a different plainText (due to different ANSI stripping),
+			// positions might be off. But since both use the same stripAnsiCodes function, they should match.
+			console.log('FancyMon: updateExtractionPreview - plainText length:', plainText.length);
+			console.log('FancyMon: updateExtractionPreview - allNumbers:', allNumbers);
+			
 			// Filter out numbers that come before the time pattern match
 			if (timeMatchEnd > 0) {
-				extractedNumbers = allNumbers.filter(num => num.position >= timeMatchEnd);
+				console.log('FancyMon: Filtering numbers before position', timeMatchEnd);
+				extractedNumbers = allNumbers.filter(num => {
+					const include = num.position >= timeMatchEnd;
+					console.log('FancyMon: Number at position', num.position, ':', num.text, 'text around it:', plainText.substring(Math.max(0, num.position - 5), num.position + num.text.length + 5), include ? 'INCLUDED' : 'EXCLUDED');
+					return include;
+				});
 				// Re-index starting from 1, but keep original index for pattern generation
 				extractedNumbers = extractedNumbers.map((num, idx) => ({
 					...num,
@@ -943,6 +1108,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			} else {
 				extractedNumbers = allNumbers;
 			}
+			
+			console.log('FancyMon: Final extractedNumbers:', extractedNumbers);
 			
 			if (extractedNumbers.length === 0) {
 				if (timeValue !== null) {
@@ -1216,15 +1383,34 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return text.replace(ansiRegex, '');
 		}
 		
-		function applyFilter(entries, pattern) {
-			if (!pattern || pattern.trim() === '') {
-				return entries;
+		function applyFilter(entries, includePattern, excludePattern) {
+			let filtered = entries;
+			
+			// Apply include filter (comma-separated patterns)
+			if (includePattern && includePattern.trim() !== '') {
+				const includePatterns = includePattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
+				if (includePatterns.length > 0) {
+					filtered = filtered.filter(entry => {
+						const plainText = stripAnsiCodes(entry.text);
+						// Line must match at least one include pattern
+						return includePatterns.some(pattern => plainText.includes(pattern));
+					});
+				}
 			}
-			const trimmedPattern = pattern.trim();
-			return entries.filter(entry => {
-				const plainText = stripAnsiCodes(entry.text);
-				return plainText.includes(trimmedPattern);
-			});
+			
+			// Apply exclude filter (comma-separated patterns)
+			if (excludePattern && excludePattern.trim() !== '') {
+				const excludePatterns = excludePattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
+				if (excludePatterns.length > 0) {
+					filtered = filtered.filter(entry => {
+						const plainText = stripAnsiCodes(entry.text);
+						// Line must not match any exclude pattern
+						return !excludePatterns.some(pattern => plainText.includes(pattern));
+					});
+				}
+			}
+			
+			return filtered;
 		}
 
 		function getBaudRate() {
@@ -1258,6 +1444,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			sendResetBtn.disabled = !isConnected || isDisconnecting;
 			sendInput.disabled = !isConnected || isDisconnecting;
 			sendBtn.disabled = !isConnected || isDisconnecting;
+			if (historyBtn) {
+				historyBtn.disabled = !isConnected || isDisconnecting;
+			}
 			refreshPorts.disabled = isConnected || isDisconnecting;
 		}
 
@@ -1543,7 +1732,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				totalTrimmedLines += linesToRemove;
 				
 				// Incrementally remove DOM nodes instead of full re-render (much faster!)
-				if (monitor && isFollowing && !filterPattern) {
+				if (monitor && isFollowing && !filterPattern && !excludeFilterPattern) {
 					// Direct child removal is much faster than querySelectorAll
 					// Remove the first N children that are line elements (not buffer line)
 					let removed = 0;
@@ -1657,7 +1846,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				trimOldLines();
 				// Don't force full render - trimOldLines() handles incremental DOM removal
 				// Only force full render if we're not following or filter is active
-				if (linesTrimmed > 0 && (!isFollowing || filterPattern)) {
+				if (linesTrimmed > 0 && (!isFollowing || filterPattern || excludeFilterPattern)) {
 					needsFullRender = true;
 					lastRenderedLineIndex = -1; // Reset render tracking
 				}
@@ -1714,7 +1903,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Optimize: only append new lines if we're following and no filter is active
 			// and we haven't trimmed lines or changed filter
-			if (isFollowing && !filterPattern && !needsFullRender && lastRenderedLineIndex >= 0) {
+			if (isFollowing && !filterPattern && !excludeFilterPattern && !needsFullRender && lastRenderedLineIndex >= 0) {
 				appendNewLinesOnly(linesAdded);
 			} else {
 				// Full render needed (filter active, lines trimmed, or first render)
@@ -1896,7 +2085,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Apply filter if pattern is set
-			lineEntries = applyFilter(lineEntries, filterPattern);
+			lineEntries = applyFilter(lineEntries, filterPattern, excludeFilterPattern);
 			
 			// Convert raw text lines to HTML, maintaining ANSI state across lines
 			let html = '';
@@ -1922,6 +2111,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Update render tracking after full render
 			lastRenderedLineIndex = rawLines.length - 1;
 			lastFilterPattern = filterPattern;
+			lastExcludeFilterPattern = excludeFilterPattern;
 			
 			// Restore scroll position based on follow state
 			if (shouldStickToBottom) {
@@ -2319,7 +2509,23 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const newPattern = filterInput.value.trim();
 				const filterChanged = newPattern !== filterPattern;
 				filterPattern = newPattern;
-				console.log('FancyMon: Filter pattern changed to:', filterPattern);
+				console.log('FancyMon: Include filter pattern changed to:', filterPattern);
+				// Re-render with new filter (force full render)
+				if (filterChanged) {
+					needsFullRender = true;
+					lastRenderedLineIndex = -1;
+					renderLinesWithBuffer();
+				}
+			});
+		}
+
+		// Exclude filter input event listener
+		if (excludeFilterInput) {
+			excludeFilterInput.addEventListener('input', () => {
+				const newPattern = excludeFilterInput.value.trim();
+				const filterChanged = newPattern !== excludeFilterPattern;
+				excludeFilterPattern = newPattern;
+				console.log('FancyMon: Exclude filter pattern changed to:', excludeFilterPattern);
 				// Re-render with new filter (force full render)
 				if (filterChanged) {
 					needsFullRender = true;
@@ -2386,7 +2592,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		copyFilteredBtn.addEventListener('click', () => {
 			// Copy all filtered lines (remove ANSI codes)
-			if (!filterPattern || filterPattern.trim() === '') {
+			if ((!filterPattern || filterPattern.trim() === '') && (!excludeFilterPattern || excludeFilterPattern.trim() === '')) {
 				vscode.postMessage({ command: 'error', message: 'No filter pattern set' });
 				return;
 			}
@@ -2404,7 +2610,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Apply filter
-			const filteredEntries = applyFilter(lineEntries, filterPattern);
+			const filteredEntries = applyFilter(lineEntries, filterPattern, excludeFilterPattern);
 			
 			// Strip ANSI codes and join
 			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
@@ -2482,17 +2688,168 @@ export function getWebviewContentHtml(cspSource: string): string {
 			copyToClipboard(content);
 		});
 
-		sendBtn.addEventListener('click', () => {
-			const data = sendInput.value;
-			if (data) {
-				vscode.postMessage({ command: 'send', data: data + '\\n' });
-				sendInput.value = '';
+		// History management functions
+		function addToHistory(message) {
+			if (!message || message.trim() === '') {
+				return; // Don't add empty messages
+			}
+			const trimmedMessage = message.trim();
+			
+			// Remove if already exists (to move to top and avoid duplicates)
+			const index = messageHistory.indexOf(trimmedMessage);
+			if (index > -1) {
+				messageHistory.splice(index, 1);
+			}
+			// Add to beginning
+			messageHistory.unshift(trimmedMessage);
+			// Limit to MAX_HISTORY items
+			if (messageHistory.length > MAX_HISTORY) {
+				messageHistory = messageHistory.slice(0, MAX_HISTORY);
+			}
+			console.log('FancyMon: History after adding:', messageHistory.length, 'items:', messageHistory);
+			// Save to extension
+			vscode.postMessage({ command: 'updateMessageHistory', history: messageHistory });
+		}
+
+		function renderHistoryDropdown() {
+			if (!historyDropdown) {
+				console.error('FancyMon: historyDropdown element not found!');
+				return;
+			}
+			
+			console.log('FancyMon: Rendering dropdown with', messageHistory.length, 'items:', messageHistory);
+			
+			historyDropdown.innerHTML = '';
+			selectedHistoryIndex = -1;
+			
+			if (messageHistory.length === 0) {
+				const emptyItem = document.createElement('div');
+				emptyItem.className = 'history-item empty';
+				emptyItem.textContent = 'No history';
+				historyDropdown.appendChild(emptyItem);
+			} else {
+				// Show all history items (up to 30)
+				messageHistory.forEach((msg, index) => {
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					item.setAttribute('data-index', index.toString());
+					item.textContent = msg;
+					item.title = msg;
+					item.addEventListener('click', () => {
+						selectHistoryItem(index);
+					});
+					item.addEventListener('mouseenter', () => {
+						selectedHistoryIndex = index;
+						updateHistorySelection();
+					});
+					historyDropdown.appendChild(item);
+					console.log('FancyMon: Added history item', index, ':', msg);
+				});
+				console.log('FancyMon: Dropdown now has', historyDropdown.children.length, 'children');
+			}
+		}
+
+		function updateHistorySelection() {
+			if (!historyDropdown) return;
+			const items = historyDropdown.querySelectorAll('.history-item:not(.empty)');
+			items.forEach((item, index) => {
+				if (index === selectedHistoryIndex) {
+					item.classList.add('selected');
+					// Scroll into view if needed
+					item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				} else {
+					item.classList.remove('selected');
+				}
+			});
+		}
+
+		function selectHistoryItem(index) {
+			if (index >= 0 && index < messageHistory.length) {
+				sendInput.value = messageHistory[index];
+				historyDropdown.style.display = 'none';
+				selectedHistoryIndex = -1;
+				sendInput.focus();
+			}
+		}
+
+		function navigateHistory(direction) {
+			if (!historyDropdown || historyDropdown.style.display === 'none' || !historyDropdown.style.display) {
+				// Show dropdown if hidden
+				renderHistoryDropdown();
+				historyDropdown.style.display = 'block';
+				selectedHistoryIndex = 0;
+			} else {
+				// Navigate within dropdown
+				if (direction === 'up') {
+					selectedHistoryIndex = Math.max(0, selectedHistoryIndex - 1);
+				} else if (direction === 'down') {
+					selectedHistoryIndex = Math.min(messageHistory.length - 1, selectedHistoryIndex + 1);
+				}
+			}
+			updateHistorySelection();
+		}
+
+		function toggleHistoryDropdown() {
+			if (!historyDropdown || !historyBtn) return;
+			
+			if (historyDropdown.style.display === 'none' || !historyDropdown.style.display) {
+				renderHistoryDropdown();
+				historyDropdown.style.display = 'block';
+			} else {
+				historyDropdown.style.display = 'none';
+			}
+		}
+
+		// Close dropdown when clicking outside
+		document.addEventListener('click', (e) => {
+			if (historyDropdown && historyBtn && 
+			    !historyDropdown.contains(e.target) && 
+			    !historyBtn.contains(e.target)) {
+				historyDropdown.style.display = 'none';
 			}
 		});
 
+		sendBtn.addEventListener('click', () => {
+			const data = sendInput.value.trim();
+			if (data) {
+				// Remove trailing newline if user added it, we'll add it ourselves
+				const cleanData = data.replace(new RegExp('\\n$'), '').replace(new RegExp('\\\\n$'), '');
+				console.log('FancyMon: Sending message, cleanData:', cleanData, 'current history length:', messageHistory.length);
+				vscode.postMessage({ command: 'send', data: cleanData + '\\n' });
+				addToHistory(cleanData);
+				sendInput.value = '';
+				historyDropdown.style.display = 'none';
+			}
+		});
+
+		if (historyBtn) {
+			historyBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				toggleHistoryDropdown();
+			});
+		}
+
 		sendInput.addEventListener('keypress', (e) => {
-			if (e.key === 'Enter') {
+			if (e.key === 'Enter' && selectedHistoryIndex < 0) {
 				sendBtn.click();
+			}
+		});
+
+		sendInput.addEventListener('keydown', (e) => {
+			if (e.key === 'ArrowUp') {
+				e.preventDefault();
+				navigateHistory('up');
+			} else if (e.key === 'ArrowDown') {
+				e.preventDefault();
+				navigateHistory('down');
+			} else if (e.key === 'Escape') {
+				if (historyDropdown && historyDropdown.style.display === 'block') {
+					historyDropdown.style.display = 'none';
+					selectedHistoryIndex = -1;
+				}
+			} else if (e.key === 'Enter' && selectedHistoryIndex >= 0 && historyDropdown && historyDropdown.style.display === 'block') {
+				e.preventDefault();
+				selectHistoryItem(selectedHistoryIndex);
 			}
 		});
 
@@ -2653,6 +3010,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 					updateUI();
 					break;
 					
+				case 'messageHistoryLoaded':
+					if (message.history && Array.isArray(message.history)) {
+						messageHistory = [...message.history]; // Create a copy to avoid reference issues
+						console.log('FancyMon: Loaded message history:', messageHistory.length, 'items:', messageHistory);
+					}
+					break;
 				case 'connected':
 					console.log('FancyMon: Received connected message!');
 					isConnected = true;
