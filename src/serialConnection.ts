@@ -52,9 +52,10 @@ export class SerialConnection {
 		return `${hours}:${minutes}:${seconds}.${milliseconds}`;
 	}
 
-	private sendStatusMessage(message: string): void {
+	private sendStatusMessage(message: string, reason?: string): void {
 		const timestamp = this.formatTimestamp();
-		this.callbacks.onData(`[${timestamp}] ${message}\n`);
+		const fullMessage = reason ? `${message} due to ${reason}` : message;
+		this.callbacks.onData(`[${timestamp}] ${fullMessage}\n`);
 	}
 
 	private async getSerialPort(): Promise<typeof import('serialport')> {
@@ -772,7 +773,7 @@ export class SerialConnection {
 		}
 	}
 
-	async disconnect(): Promise<void> {
+	async disconnect(reason?: string): Promise<void> {
 		// Prevent multiple simultaneous disconnect calls
 		if (this.isDisconnecting) {
 			this.logDebug('Disconnect already in progress, ignoring');
@@ -781,7 +782,7 @@ export class SerialConnection {
 		
 		if (this.port) {
 			// Send disconnect message FIRST
-			this.sendStatusMessage('[[ DISCONNECTED ]]');
+			this.sendStatusMessage('[[ DISCONNECTED ]]', reason);
 			
 			this.isDisconnecting = true;
 			this.disconnectStartTime = Date.now();
