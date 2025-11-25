@@ -21,6 +21,7 @@ export class SerialMonitor {
 	private messageQueue: string[] = [];
 	private readonly configKey = 'fancymon.lastConfig';
 	private readonly wrapStateKey = 'fancymon.lineWrapEnabled';
+	private readonly messageHistoryKey = 'fancymon.messageHistory';
 	public connection: SerialConnection; // Made public for external access
 
 	constructor(private context: vscode.ExtensionContext) {
@@ -137,7 +138,6 @@ export class SerialMonitor {
 					case 'connect':
 						console.log('FancyMon: Received connect command from webview!');
 						console.log('FancyMon: Connect config:', JSON.stringify(message.config));
-						vscode.window.showInformationMessage(`FancyMon: Connect command received! Port: ${message.config?.port || 'unknown'}`).then(() => {});
 						await this.connect(message.config);
 						break;
 					case 'disconnect':
@@ -167,6 +167,13 @@ export class SerialMonitor {
 					case 'updateWrapState':
 						// Update wrap state in separate storage
 						this.context.workspaceState.update(this.wrapStateKey, message.lineWrapEnabled);
+						break;
+					case 'updateMessageHistory':
+						// Save message history
+						if (message.history && Array.isArray(message.history)) {
+							console.log('FancyMon: Saving message history:', message.history.length, 'items:', message.history);
+							this.context.workspaceState.update(this.messageHistoryKey, [...message.history]); // Create a copy
+						}
 						break;
 					default:
 						console.warn('FancyMon: Unknown command:', message.command);
@@ -234,11 +241,21 @@ export class SerialMonitor {
 			// Get wrap state from separate storage (default to true if not set)
 			const wrapState = this.context.workspaceState.get<boolean>(this.wrapStateKey) ?? true;
 			
+			// Get message history
+			const messageHistory = this.context.workspaceState.get<string[]>(this.messageHistoryKey) || [];
+			console.log('FancyMon: Loading message history from storage:', messageHistory.length, 'items:', messageHistory);
+			
 			this.sendMessage({
 				command: 'portsListed',
 				ports: ports,
 				lastConfig: lastConfig,
 				lineWrapEnabled: wrapState
+			});
+			
+			// Send message history separately
+			this.sendMessage({
+				command: 'messageHistoryLoaded',
+				history: [...messageHistory] // Create a copy
 			});
 		} catch (error: any) {
 			console.error('FancyMon: Error listing ports:', error);
@@ -253,14 +270,12 @@ export class SerialMonitor {
 
 	public async connect(config: SerialMonitorConfig): Promise<void> {
 		console.log('FancyMon: SerialMonitor.connect() called with config:', JSON.stringify(config));
-		vscode.window.showInformationMessage(`FancyMon: SerialMonitor.connect() called! Port: ${config.port}`).then(() => {});
 		// Save the configuration for next time
 		this.saveConfig(config);
 		console.log('FancyMon: SerialMonitor calling connection.connect()...');
 		try {
 			await this.connection.connect(config);
 			console.log('FancyMon: SerialMonitor connection.connect() completed');
-			vscode.window.showInformationMessage(`FancyMon: Connection successful!`).then(() => {});
 		} catch (error: any) {
 			console.error('FancyMon: SerialMonitor connection.connect() FAILED:', error);
 			vscode.window.showErrorMessage(`FancyMon: Connection failed: ${error?.message || error}`).then(() => {});
@@ -268,8 +283,8 @@ export class SerialMonitor {
 		}
 	}
 
-	public async disconnect(): Promise<void> {
-		await this.connection.disconnect();
+	public async disconnect(reason?: string): Promise<void> {
+		await this.connection.disconnect(reason);
 	}
 
 	private async saveToFile(content: string): Promise<void> {

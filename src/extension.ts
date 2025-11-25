@@ -62,11 +62,6 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	const testDisposable = vscode.commands.registerCommand('fancymon.test', () => {
-		vscode.window.showInformationMessage('FancyMon test command works!');
-		console.log('FancyMon test command was called!');
-	});
-
 	// Register disconnect command (can be called by ESP-IDF or other extensions)
 	const disconnectDisposable = vscode.commands.registerCommand('fancymon.disconnect', async () => {
 		console.log('FancyMon: Disconnect command called (likely by ESP-IDF or task)');
@@ -106,7 +101,18 @@ export function activate(context: vscode.ExtensionContext) {
 				if (serialMonitor.getLastConfig) {
 					lastConfigBeforeDisconnect = serialMonitor.getLastConfig();
 				}
-				await serialMonitor.disconnect();
+				// Create a descriptive reason from the task information
+				let reason = 'ESP-IDF';
+				if (taskName.includes('flash')) {
+					reason = 'ESP-IDF Flash';
+				} else if (taskName.includes('build')) {
+					reason = 'ESP-IDF Build';
+				} else if (taskCommand.includes('flash')) {
+					reason = 'ESP-IDF Flash';
+				} else if (taskCommand.includes('build')) {
+					reason = 'ESP-IDF Build';
+				}
+				await serialMonitor.disconnect(reason);
 				disconnectedForIdfTask = true;
 				console.log('FancyMon: Auto-disconnected for ESP-IDF task, will reconnect when task completes');
 			}
@@ -159,7 +165,6 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(disposable);
-	context.subscriptions.push(testDisposable);
 	context.subscriptions.push(disconnectDisposable);
 	context.subscriptions.push(taskStartDisposable);
 	context.subscriptions.push(taskEndDisposable);
