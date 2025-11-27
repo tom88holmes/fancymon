@@ -65,7 +65,7 @@ None at this time. If you encounter any issues, please report them on the extens
 
 ## Release Notes
 
-### 0.0.3
+### 0.0.4
 
 Major feature update bringing advanced debugging and plotting capabilities:
 - **Enhanced Plotting**: Switched to Plotly.js for more interactive and powerful real-time plotting with zoom, pan, and better performance.
