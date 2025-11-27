@@ -8,7 +8,7 @@ let serialMonitor: any = undefined;
 console.log('FancyMon: Module file is being loaded!');
 
 export function activate(context: vscode.ExtensionContext) {
-	console.log('=== FancyMon extension ACTIVATING ===');
+	console.log('=== FancyMon extension ACTIVATING (v0.0.3 - ELF Support) ===');
 	console.log('Extension context:', context.extensionPath);
 	console.log('Extension URI:', context.extensionUri.toString());
 	
@@ -79,6 +79,22 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Auto-detect ESP-IDF flash/build tasks and disconnect
 	const taskStartDisposable = vscode.tasks.onDidStartTask(async (event) => {
+		console.log('FancyMon: Task Started:', event.execution.task.name);
+		try {
+			console.log('FancyMon: Full Task Definition:', JSON.stringify(event.execution.task.definition, null, 2));
+			if (event.execution.task.execution) {
+				const exec = event.execution.task.execution as any;
+				// Log execution details which might contain the ELF path in args or command line
+				if (exec.process) { console.log('FancyMon: Task Process:', exec.process); }
+				if (exec.command) { console.log('FancyMon: Task Command:', exec.command); }
+				if (exec.commandLine) { console.log('FancyMon: Task Command Line:', exec.commandLine); }
+				if (exec.args) { console.log('FancyMon: Task Args:', JSON.stringify(exec.args, null, 2)); }
+				if (exec.options) { console.log('FancyMon: Task Options:', JSON.stringify(exec.options, null, 2)); }
+			}
+		} catch (e) {
+			console.error('FancyMon: Error logging task details:', e);
+		}
+
 		const taskName = event.execution.task.name?.toLowerCase() || '';
 		const taskType = event.execution.task.definition?.type || '';
 		const taskCommand = event.execution.task.definition?.command || '';
@@ -134,6 +150,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Auto-reconnect when ESP-IDF tasks finish
 	const taskEndDisposable = vscode.tasks.onDidEndTask(async (event) => {
+		console.log('FancyMon: Task Ended:', event.execution.task.name);
+		
 		const taskName = event.execution.task.name?.toLowerCase() || '';
 		const taskType = event.execution.task.definition?.type || '';
 		const taskCommand = event.execution.task.definition?.command || '';

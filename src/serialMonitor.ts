@@ -1,6 +1,9 @@
 ﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as cp from 'child_process';
+import * as util from 'util';
+import * as os from 'os';
 import { applyFilter, type LineEntry } from './filter';
 import { getWebviewContentHtml } from './webviewContent';
 import { SerialConnection, type SerialConnectionCallbacks } from './serialConnection';
@@ -22,6 +25,9 @@ export class SerialMonitor {
 	private readonly configKey = 'fancymon.lastConfig';
 	private readonly wrapStateKey = 'fancymon.lineWrapEnabled';
 	private readonly messageHistoryKey = 'fancymon.messageHistory';
+	private readonly includeFilterHistoryKey = 'fancymon.includeFilterHistory';
+	private readonly excludeFilterHistoryKey = 'fancymon.excludeFilterHistory';
+	private readonly elfFileKey = 'fancymon.elfFile';
 	public connection: SerialConnection; // Made public for external access
 
 	constructor(private context: vscode.ExtensionContext) {
@@ -29,6 +35,7 @@ export class SerialMonitor {
 		const callbacks: SerialConnectionCallbacks = {
 			onData: (data: string) => {
 				this.sendMessage({ command: 'data', data });
+				this.resolveAddresses(data);
 			},
 			onError: (error: string) => {
 				this.sendMessage({ command: 'error', message: error });
@@ -175,6 +182,94 @@ export class SerialMonitor {
 							this.context.workspaceState.update(this.messageHistoryKey, [...message.history]); // Create a copy
 						}
 						break;
+					case 'updateIncludeFilterHistory':
+						// Save include filter history
+						if (message.history && Array.isArray(message.history)) {
+							console.log('FancyMon: Saving include filter history:', message.history.length, 'items:', message.history);
+							this.context.workspaceState.update(this.includeFilterHistoryKey, [...message.history]); // Create a copy
+						}
+						break;
+					case 'updateExcludeFilterHistory':
+						// Save exclude filter history
+						if (message.history && Array.isArray(message.history)) {
+							console.log('FancyMon: Saving exclude filter history:', message.history.length, 'items:', message.history);
+							this.context.workspaceState.update(this.excludeFilterHistoryKey, [...message.history]); // Create a copy
+						}
+						break;
+
+					case 'selectElfFile':
+						const uris = await vscode.window.showOpenDialog({
+							canSelectFiles: true,
+							canSelectFolders: false,
+							canSelectMany: false,
+							filters: {
+								'ELF Files': ['elf'],
+								'All Files': ['*']
+							}
+						});
+						
+						if (uris && uris.length > 0) {
+							const uri = uris[0];
+							const fsPath = uri.fsPath;
+							const name = path.basename(fsPath);
+							
+							try {
+								const stats = fs.statSync(fsPath);
+								const elfInfo = {
+									path: fsPath,
+									name: name,
+									date: stats.mtime.toISOString()
+								};
+								
+								// Save to workspace state
+								await this.context.workspaceState.update(this.elfFileKey, elfInfo);
+								
+								// Send to webview
+								this.sendMessage({ 
+									command: 'setElfFile', 
+									path: elfInfo.path, 
+									name: elfInfo.name, 
+									date: elfInfo.date 
+								});
+							} catch (e) {
+								console.error('Error getting file stats:', e);
+							}
+						}
+						break;
+
+					case 'clearElfFile':
+						// Clear workspace state
+						await this.context.workspaceState.update(this.elfFileKey, undefined);
+						
+						// Send empty info to webview
+						this.sendMessage({ 
+							command: 'setElfFile', 
+							path: null, 
+							name: null, 
+							date: null 
+						});
+						break;
+
+					case 'testBacktrace':
+						const testData = `I [2025-11-26 00:01:47.769](61403) SYSTEM:               [1:          sleep] ending put_playback_manager_to_sleep
+I [2025-11-26 00:01:47.770](61404) BATT:                 [1:          sleep] Starting battery read sleep
+DEBUG: Panic handler called, is_stack_overflow = 0
+DEBUG: Overwriting with panic info
+assert failed: xTaskPriorityDisinherit tasks.c:5107 (pxTCB == pxCurrentTCBs[ xPortGetCoreID() ])
+Backtrace: 0x4037602e:0x3fcb64b0 0x40387ee9:0x3fcb64d0 0x4038cbe1:0x3fcb64f0 0x421daa35:0x3fcb6610 0x403884c3:0x3fcb6630 0x421d8d39:0x3fcb6650 0x4037765b:0x3fcb6690 0x42132eab:0x3fcb66c0 0x4213be8a:0x3fcb66f0 0x42038866:0x3fcb6720 0x4200e3d3:0x3fcb6860 0x42057ca7:0x3fcb6880 0x420585fb:0x3fcb68d0
+ELF file SHA256: aee993fcf7b22503
+Rebooting...
+GPIO10 level: 1, OUT_EN: 0, IN_EN: 1, PU: 1, PD: 0, global_hold: 0, slp_sel: -1
+I (696) cpu_start: Multicore app
+I (697) octal_psram: vendor id    : 0x0d (AP)
+I (697) octal_psram: dev id       : 0x02 (generation 3)
+I (697) octal_psram: density      : 0x03 (64 Mbit)
+I (697) octal_psram: good-die     : 0x01 (Pass)
+`;
+						console.log('FancyMon: Simulating test backtrace data...');
+						this.simulateData(testData);
+						break;
+
 					default:
 						console.warn('FancyMon: Unknown command:', message.command);
 					}
@@ -245,6 +340,12 @@ export class SerialMonitor {
 			const messageHistory = this.context.workspaceState.get<string[]>(this.messageHistoryKey) || [];
 			console.log('FancyMon: Loading message history from storage:', messageHistory.length, 'items:', messageHistory);
 			
+			// Get filter histories
+			const includeFilterHistory = this.context.workspaceState.get<string[]>(this.includeFilterHistoryKey) || [];
+			const excludeFilterHistory = this.context.workspaceState.get<string[]>(this.excludeFilterHistoryKey) || [];
+			console.log('FancyMon: Loading include filter history:', includeFilterHistory.length, 'items:', includeFilterHistory);
+			console.log('FancyMon: Loading exclude filter history:', excludeFilterHistory.length, 'items:', excludeFilterHistory);
+			
 			this.sendMessage({
 				command: 'portsListed',
 				ports: ports,
@@ -257,6 +358,40 @@ export class SerialMonitor {
 				command: 'messageHistoryLoaded',
 				history: [...messageHistory] // Create a copy
 			});
+			
+			// Send filter histories separately
+			this.sendMessage({
+				command: 'includeFilterHistoryLoaded',
+				history: [...includeFilterHistory] // Create a copy
+			});
+			
+			this.sendMessage({
+				command: 'excludeFilterHistoryLoaded',
+				history: [...excludeFilterHistory] // Create a copy
+			});
+
+			// Restore ELF file
+			const savedElf = this.context.workspaceState.get<any>(this.elfFileKey);
+			if (savedElf) {
+				// Check if file still exists/update stats
+				try {
+					if (fs.existsSync(savedElf.path)) {
+						const stats = fs.statSync(savedElf.path);
+						savedElf.date = stats.mtime.toISOString(); // Update date
+						// Update state in background
+						this.context.workspaceState.update(this.elfFileKey, savedElf);
+					}
+				} catch (e) {
+					// Ignore error, use saved date
+				}
+				
+				this.sendMessage({ 
+					command: 'setElfFile', 
+					path: savedElf.path, 
+					name: savedElf.name, 
+					date: savedElf.date 
+				});
+			}
 		} catch (error: any) {
 			console.error('FancyMon: Error listing ports:', error);
 			const errorMessage = `Failed to list ports: ${error?.message || error}`;
@@ -285,6 +420,11 @@ export class SerialMonitor {
 
 	public async disconnect(reason?: string): Promise<void> {
 		await this.connection.disconnect(reason);
+	}
+
+	public simulateData(data: string): void {
+		this.sendMessage({ command: 'data', data });
+		this.resolveAddresses(data);
 	}
 
 	private async saveToFile(content: string): Promise<void> {
@@ -332,7 +472,194 @@ export class SerialMonitor {
 		}
 	}
 
+	/**
+	 * Tries to find the ESP-IDF toolchain bin directory.
+	 * Search order:
+	 * 1. fancymon.toolchainPath configuration setting
+	 * 2. Common default locations in ~/.espressif
+	 */
+	private findToolchainBinPath(): string | null {
+		// 1. Check configuration
+		const config = vscode.workspace.getConfiguration('fancymon');
+		const configPath = config.get<string>('toolchainPath');
+		if (configPath && fs.existsSync(configPath)) {
+			return configPath;
+		}
+
+		// 2. Auto-discovery in ~/.espressif
+		try {
+			const homeDir = os.homedir();
+			const espressifDir = path.join(homeDir, '.espressif', 'tools');
+			
+			if (!fs.existsSync(espressifDir)) {
+				return null;
+			}
+
+			// Recursive search helper for bin directories containing addr2line
+			const findBinWithTool = (dir: string, toolName: string, depth: number = 0): string | null => {
+				if (depth > 5) { return null; } // Limit depth
+				
+				try {
+					const items = fs.readdirSync(dir);
+					
+					// Check if current dir has bin/toolName
+					if (items.includes('bin')) {
+						const binPath = path.join(dir, 'bin');
+						if (fs.existsSync(path.join(binPath, toolName))) {
+							return binPath;
+						}
+					}
+					
+					// Check subdirectories
+					for (const item of items) {
+						const fullPath = path.join(dir, item);
+						if (fs.statSync(fullPath).isDirectory() && !item.startsWith('.')) {
+							const found = findBinWithTool(fullPath, toolName, depth + 1);
+							if (found) { return found; }
+						}
+					}
+				} catch (e) {
+					// Ignore access errors
+				}
+				return null;
+			};
+
+			// Try to find specific tools
+			const toolNames = [
+				'xtensa-esp32s3-elf-addr2line.exe', // Windows
+				'xtensa-esp32s3-elf-addr2line',     // Linux/Mac
+				'xtensa-esp32-elf-addr2line.exe',
+				'xtensa-esp32-elf-addr2line'
+			];
+
+			for (const toolName of toolNames) {
+				const found = findBinWithTool(espressifDir, toolName);
+				if (found) {
+					return found;
+				}
+			}
+
+		} catch (e) {
+			console.error('Error during toolchain discovery:', e);
+		}
+
+		return null;
+	}
+
+	private async resolveAddresses(data: string): Promise<void> {
+		const elfFile = this.context.workspaceState.get<any>(this.elfFileKey);
+		if (!elfFile || !fs.existsSync(elfFile.path)) {
+			return;
+		}
+
+		// Regex for 8-digit hex addresses (0x40xxxxxx or 0x42xxxxxx or 0x3fxxxxxx)
+		const hexRegex = /0x[0-9a-fA-F]{8}/g;
+		const matches = data.match(hexRegex);
+		
+		if (!matches || matches.length === 0) {
+			return;
+		}
+
+		// Filter unique addresses to avoid duplicate lookups in the same chunk
+		const addresses = [...new Set(matches)];
+		
+		// Try common toolchain names
+		const tools = [
+			'xtensa-esp32s3-elf-addr2line',
+			'xtensa-esp32-elf-addr2line',
+			'riscv32-esp-elf-addr2line',
+			'addr2line'
+		];
+
+		// Find toolchain path
+		const toolchainPath = this.findToolchainBinPath();
+
+		const tryRunAddr2Line = async (toolIndex: number): Promise<string> => {
+			if (toolIndex >= tools.length) {
+				return '';
+			}
+			
+			let tool = tools[toolIndex];
+			// If we found a toolchain path, prepend it (unless on Windows where we might need .exe)
+			if (toolchainPath) {
+				const toolWithExt = process.platform === 'win32' && !tool.endsWith('.exe') ? tool + '.exe' : tool;
+				const fullPath = path.join(toolchainPath, toolWithExt);
+				if (fs.existsSync(fullPath)) {
+					tool = fullPath;
+				}
+			}
+			
+			const args = ['-e', elfFile.path, '-f', '-C', '-a', ...addresses];
+			
+			return new Promise<string>((resolve) => {
+				const child = cp.spawn(tool, args);
+				let output = '';
+
+				child.stdout.on('data', (d) => { output += d.toString(); });
+
+				child.on('error', (err) => {
+					resolve(tryRunAddr2Line(toolIndex + 1));
+				});
+
+				child.on('close', (code) => {
+					if (code === 0 && output.trim().length > 0) {
+						resolve(output);
+					} else {
+						resolve(tryRunAddr2Line(toolIndex + 1));
+					}
+				});
+			});
+		};
+
+		try {
+			const output = await tryRunAddr2Line(0);
+			if (output) {
+				this.processAddr2LineOutput(output);
+			}
+		} catch (e) {
+			console.error('FancyMon: Error resolving addresses:', e);
+		}
+	}
+
+	private processAddr2LineOutput(output: string): void {
+		// Output format with -a:
+		// 0xaddress
+		// function_name
+		// file_path:line
+		const lines = output.trim().split(/\r?\n/);
+		let i = 0;
+		while (i < lines.length) {
+			const addrLine = lines[i++].trim();
+			if (!addrLine.startsWith('0x')) {
+				continue; // Should verify address format
+			}
+			
+			if (i >= lines.length) {
+				break;
+			}
+			const funcName = lines[i++].trim();
+			
+			if (i >= lines.length) {
+				break;
+			}
+			const fileLine = lines[i++].trim();
+
+			// Filter out useless results
+			if (funcName === '??' || fileLine.startsWith('??')) {
+				continue;
+			}
+
+			// Format the output line
+			// --- 0x4037602e: panic_abort at C:/.../panic.c:466
+			const formattedLine = `--- ${addrLine}: ${funcName} at ${fileLine}`;
+			
+			// Send to webview
+			this.sendMessage({ command: 'data', data: formattedLine + '\n' });
+		}
+	}
+
 	private getWebviewContent(): string {
 		return getWebviewContentHtml(this.panel?.webview.cspSource || '');
 	}
 }
+

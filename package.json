@@ -40,11 +40,6 @@
         "icon": "$(terminal)"
       },
       {
-        "command": "fancymon.test",
-        "title": "FancyMon Test",
-        "category": "FancyMon"
-      },
-      {
         "command": "fancymon.disconnect",
         "title": "Disconnect Serial Monitor",
         "category": "FancyMon"
@@ -58,6 +53,16 @@
           "when": "true"
         }
       ]
+    },
+    "configuration": {
+      "title": "FancyMon",
+      "properties": {
+        "fancymon.toolchainPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ESP-IDF toolchain bin directory (containing addr2line tools). If empty, FancyMon will try to auto-discover it."
+        }
+      }
     }
   },
   "scripts": {

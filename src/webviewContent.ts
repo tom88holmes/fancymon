@@ -10,7 +10,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Serial Monitor</title>
-	<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+	<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 	<style>
 		* {
 			box-sizing: border-box;
@@ -49,12 +49,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 			flex-wrap: wrap;
 			align-items: center;
 			width: 100%;
+			overflow: visible;
 		}
 
 		.control-group {
 			display: flex;
 			align-items: center;
 			gap: 5px;
+			overflow: visible;
 		}
 
 		.control-group label {
@@ -298,8 +300,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 			border: 1px solid var(--vscode-dropdown-border);
 			border-radius: 2px;
 			box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
-			z-index: 1000;
+			z-index: 1002;
 			margin-bottom: 2px;
+		}
+
+		/* Special styling for filter dropdowns that should appear BELOW the input */
+		.filter-dropdown {
+			top: 100%;
+			bottom: auto;
+			margin-top: 2px;
+			margin-bottom: 0;
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 		}
 
 		.history-item {
@@ -523,7 +534,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			border-radius: 2px;
 		}
 
-		#plotCanvas {
+		#plotDiv {
 			width: 100%;
 			height: 100%;
 		}
@@ -606,16 +617,26 @@ export function getWebviewContentHtml(cspSource: string): string {
 		<button id="copyAllBtn">Copy All</button>
 		<button id="copyFilteredBtn">Copy All Filtered</button>
 		<button id="copyVisibleBtn">Copy All Visible</button>
+		<button id="selectElfBtn" title="Load ELF File">Load ELF File</button>
+		<button id="testBacktraceBtn" title="Simulate Backtrace Data">Test</button>
 	</div>
 
 	<div class="controls-row">
 		<div class="control-group" style="flex: 1;">
 			<label>Include:</label>
-			<input type="text" id="filterInput" placeholder="Comma-separated patterns to include..." style="flex: 1; min-width: 200px;">
+			<div class="filter-input-wrapper" style="flex: 1; position: relative; display: flex; z-index: 1001; overflow: visible;">
+				<button id="includeHistoryBtn" class="history-btn" title="Filter history">▼</button>
+				<input type="text" id="filterInput" placeholder="Comma-separated patterns to include..." style="flex: 1; min-width: 200px; border-left: none; border-radius: 0 2px 2px 0;">
+				<div id="includeHistoryDropdown" class="history-dropdown filter-dropdown" style="display: none;"></div>
+			</div>
 		</div>
 		<div class="control-group" style="flex: 1;">
 			<label>Exclude:</label>
-			<input type="text" id="excludeFilterInput" placeholder="Comma-separated patterns to exclude..." style="flex: 1; min-width: 200px;">
+			<div class="filter-input-wrapper" style="flex: 1; position: relative; display: flex; z-index: 1001; overflow: visible;">
+				<button id="excludeHistoryBtn" class="history-btn" title="Filter history">▼</button>
+				<input type="text" id="excludeFilterInput" placeholder="Comma-separated patterns to exclude..." style="flex: 1; min-width: 200px; border-left: none; border-radius: 0 2px 2px 0;">
+				<div id="excludeHistoryDropdown" class="history-dropdown filter-dropdown" style="display: none;"></div>
+			</div>
 		</div>
 	</div>
 
@@ -664,7 +685,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			</div>
 		</div>
 		<div class="plot-container">
-			<canvas id="plotCanvas"></canvas>
+			<div id="plotDiv"></div>
 		</div>
 	</div>
 
@@ -742,6 +763,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const scrollbarIndicator = document.getElementById('scrollbarIndicator');
 		const filterInput = document.getElementById('filterInput');
 		const excludeFilterInput = document.getElementById('excludeFilterInput');
+		const includeHistoryBtn = document.getElementById('includeHistoryBtn');
+		const excludeHistoryBtn = document.getElementById('excludeHistoryBtn');
+		const includeHistoryDropdown = document.getElementById('includeHistoryDropdown');
+		const excludeHistoryDropdown = document.getElementById('excludeHistoryDropdown');
+		const testBacktraceBtn = document.getElementById('testBacktraceBtn');
 		
 		let maxLines = 10000;
 		let lineCount = 0;
@@ -752,6 +778,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let messageHistory = [];
 		const MAX_HISTORY = 30;
 		let selectedHistoryIndex = -1; // Track selected item for keyboard navigation
+		
+		// Filter history (most recent first, max 30 items)
+		let includeFilterHistory = [];
+		let excludeFilterHistory = [];
+		const MAX_FILTER_HISTORY = 30;
+		let selectedIncludeHistoryIndex = -1;
+		let selectedExcludeHistoryIndex = -1;
+		
+		// Debounce timers for filter history (5 seconds)
+		let includeFilterDebounceTimer = null;
+		let excludeFilterDebounceTimer = null;
+		const FILTER_HISTORY_DEBOUNCE_MS = 5000;
 		let frozenAnchorLine = null;
 		let frozenAnchorOffset = 0;
 		let anchorLostScrollTop = null; // Track scroll position when anchor was lost
@@ -783,11 +821,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const pausePlotBtn = document.getElementById('pausePlotBtn');
 		const variablesList = document.getElementById('variablesList');
 		const timePatternInput = document.getElementById('timePatternInput');
-		const plotCanvas = document.getElementById('plotCanvas');
+		const plotDiv = document.getElementById('plotDiv');
 		
 		let plotVariables = []; // Array of {id, name, pattern, regex, data: [{time, value}], color}
-		let plotChart = null;
+		let plotInitialized = false;
 		let isPlotPaused = false;
+		const MAX_PLOT_POINTS = 10000; // Maximum number of data points per variable
 		let currentActiveTab = 'monitor';
 		let selectedNumbers = new Set(); // Track which number indices are selected
 		let extractedNumbers = []; // Current extracted numbers from pattern input
@@ -809,84 +848,128 @@ export function getWebviewContentHtml(cspSource: string): string {
 					plotTab.classList.add('active');
 					currentActiveTab = 'plot';
 					// Initialize chart if not already done
-					if (!plotChart && plotCanvas && typeof Chart !== 'undefined') {
+					if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
 						setTimeout(() => {
 							initializeChart();
 						}, 100);
-					} else if (plotChart) {
+					} else if (plotInitialized) {
 						// Resize chart when switching to plot tab
 						setTimeout(() => {
-							plotChart.resize();
+							Plotly.Plots.resize(plotDiv);
 						}, 100);
 					}
 				}
 			});
 		});
 
-		// Initialize Chart.js
+		// Initialize Plotly.js
 		function initializeChart() {
-			if (!plotCanvas || typeof Chart === 'undefined') {
-				console.error('Chart.js not loaded or canvas not found');
+			if (!plotDiv || typeof Plotly === 'undefined') {
+				console.error('Plotly.js not loaded or plot div not found');
 				return;
 			}
 
-			const ctx = plotCanvas.getContext('2d');
-			plotChart = new Chart(ctx, {
-				type: 'line',
-				data: {
-					datasets: []
+			// Prepare data traces from existing variables
+			const traces = plotVariables.map(variable => ({
+				x: variable.data.map(d => d.time),
+				y: variable.data.map(d => d.value),
+				name: variable.name,
+				type: 'scatter',
+				mode: 'lines',
+				line: {
+					color: variable.color,
+					width: 2
 				},
-				options: {
-					responsive: true,
-					maintainAspectRatio: false,
-					interaction: {
-						mode: 'index',
-						intersect: false,
-					},
-					scales: {
-						x: {
-							type: 'linear',
-							position: 'bottom',
-							title: {
-								display: true,
-								text: 'Time (uptime)'
-							}
-						},
-						y: {
-							title: {
-								display: true,
-								text: 'Value'
-							}
-						}
-					},
-					plugins: {
-						legend: {
-							display: true,
-							position: 'top'
-						},
-						tooltip: {
-							enabled: true
-						}
-					},
-					animation: false // Disable animation for better performance with live data
-				}
-			});
+				hovertemplate: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+			}));
 
-			// Handle canvas resize
+			const layout = {
+				title: {
+					text: 'Real-time Data Plot',
+					font: {
+						color: 'var(--vscode-foreground)'
+					}
+				},
+				xaxis: {
+					title: {
+						text: 'Time (uptime)',
+						font: {
+							color: 'var(--vscode-foreground)'
+						}
+					},
+					gridcolor: 'var(--vscode-panel-border)',
+					zerolinecolor: 'var(--vscode-panel-border)',
+					color: 'var(--vscode-foreground)'
+				},
+				yaxis: {
+					title: {
+						text: 'Value',
+						font: {
+							color: 'var(--vscode-foreground)'
+						}
+					},
+					gridcolor: 'var(--vscode-panel-border)',
+					zerolinecolor: 'var(--vscode-panel-border)',
+					color: 'var(--vscode-foreground)'
+				},
+				plot_bgcolor: 'var(--vscode-textCodeBlock-background)',
+				paper_bgcolor: 'var(--vscode-textCodeBlock-background)',
+				font: {
+					color: 'var(--vscode-foreground)'
+				},
+				legend: {
+					x: 0,
+					y: 1,
+					bgcolor: 'transparent',
+					bordercolor: 'var(--vscode-panel-border)',
+					font: {
+						color: 'var(--vscode-foreground)'
+					}
+				},
+				margin: { l: 60, r: 30, t: 50, b: 50 },
+				hovermode: 'x unified'
+			};
+
+			const config = {
+				responsive: true,
+				displayModeBar: true,
+				displaylogo: false,
+				modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+				toImageButtonOptions: {
+					format: 'png',
+					filename: 'fancymon-plot',
+					height: 600,
+					width: 1200,
+					scale: 1
+				}
+			};
+
+			Plotly.newPlot(plotDiv, traces, layout, config);
+			plotInitialized = true;
+
+			// Handle resize
 			const resizeObserver = new ResizeObserver(() => {
-				if (plotChart) {
-					plotChart.resize();
+				if (plotInitialized) {
+					Plotly.Plots.resize(plotDiv);
 				}
 			});
-			resizeObserver.observe(plotCanvas);
-			
-			// Also restore existing datasets if any
-			plotVariables.forEach((variable, index) => {
-				if (plotChart.data.datasets[index]) {
-					plotChart.data.datasets[index].data = variable.data.map(d => ({ x: d.time, y: d.value }));
-				}
-			});
-			plotChart.update('none');
+			resizeObserver.observe(plotDiv);
+		}
+
+		// Update Plotly chart with current data
+		function updateChart() {
+			if (!plotInitialized || !plotDiv) return;
+
+			// Prepare data arrays for all traces
+			const xArrays = plotVariables.map(variable => variable.data.map(d => d.time));
+			const yArrays = plotVariables.map(variable => variable.data.map(d => d.value));
+			const traceIndices = Array.from({ length: plotVariables.length }, (_, i) => i);
+
+			// Use restyle for efficient updates (only updates data, not layout)
+			Plotly.restyle(plotDiv, {
+				x: xArrays,
+				y: yArrays
+			}, traceIndices);
 		}
 
 		// Extract numbers from text
@@ -1184,17 +1267,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 				plotVariables.push(variable);
 				
-				// Add dataset to chart
-				if (plotChart) {
-					plotChart.data.datasets.push({
-						label: variable.name,
-						data: [],
-						borderColor: color,
-						backgroundColor: color + '40',
-						fill: false,
-						tension: 0.1
-					});
-					plotChart.update('none');
+				// Initialize chart if needed and add trace
+				if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
+					initializeChart();
+				} else if (plotInitialized) {
+					// Add new trace to existing plot
+					const newTrace = {
+						x: [],
+						y: [],
+						name: variable.name,
+						type: 'scatter',
+						mode: 'lines',
+						line: {
+							color: color,
+							width: 2
+						},
+						hovertemplate: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+					};
+					Plotly.addTraces(plotDiv, newTrace);
 				}
 			});
 
@@ -1269,9 +1359,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 			plotVariables.splice(index, 1);
 			
-			if (plotChart) {
-				plotChart.data.datasets.splice(index, 1);
-				plotChart.update();
+			if (plotInitialized && plotDiv) {
+				Plotly.deleteTraces(plotDiv, index);
 			}
 
 			updateVariablesList();
@@ -1315,16 +1404,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 						if (!isNaN(value)) {
 							variable.data.push({ time: timeValue, value: value });
 							
-							// Limit data points (keep last 1000)
-							if (variable.data.length > 1000) {
+							// Limit data points (keep last MAX_PLOT_POINTS)
+							if (variable.data.length > MAX_PLOT_POINTS) {
 								variable.data.shift();
 							}
 
-							// Update chart data (but don't update chart yet - batch updates)
-							if (plotChart && plotChart.data.datasets[index]) {
-								plotChart.data.datasets[index].data = variable.data.map(d => ({ x: d.time, y: d.value }));
-								chartNeedsUpdate = true;
-							}
+							chartNeedsUpdate = true;
 						}
 					}
 				} catch (e) {
@@ -1333,8 +1418,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 
 			// Batch chart update (only once per line, not per variable)
-			if (chartNeedsUpdate && plotChart) {
-				plotChart.update('none');
+			if (chartNeedsUpdate && plotInitialized && plotDiv) {
+				updateChart();
 			}
 			
 			// Only update variables list occasionally (not every line)
@@ -1361,9 +1446,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 		if (clearPlotBtn) {
 			clearPlotBtn.addEventListener('click', () => {
 				plotVariables.forEach(v => v.data = []);
-				if (plotChart) {
-					plotChart.data.datasets.forEach(ds => ds.data = []);
-					plotChart.update();
+				if (plotInitialized && plotDiv) {
+					updateChart();
 				}
 				updateVariablesList();
 			});
@@ -2503,6 +2587,26 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 		});
 
+		// ELF File selection
+		if (selectElfBtn) {
+			selectElfBtn.addEventListener('click', () => {
+				vscode.postMessage({ command: 'selectElfFile' });
+			});
+			
+			// Right-click to clear
+			selectElfBtn.addEventListener('contextmenu', (e) => {
+				e.preventDefault();
+				vscode.postMessage({ command: 'clearElfFile' });
+			});
+		}
+
+		if (testBacktraceBtn) {
+			testBacktraceBtn.addEventListener('click', () => {
+				console.log('FancyMon: Test button clicked!');
+				vscode.postMessage({ command: 'testBacktrace' });
+			});
+		}
+
 		// Filter input event listener
 		if (filterInput) {
 			filterInput.addEventListener('input', () => {
@@ -2515,6 +2619,36 @@ export function getWebviewContentHtml(cspSource: string): string {
 					needsFullRender = true;
 					lastRenderedLineIndex = -1;
 					renderLinesWithBuffer();
+				}
+				
+				// Debounce adding to history (5 seconds)
+				if (includeFilterDebounceTimer) {
+					clearTimeout(includeFilterDebounceTimer);
+				}
+				includeFilterDebounceTimer = setTimeout(() => {
+					if (filterPattern && filterPattern.trim() !== '') {
+						addToIncludeFilterHistory(filterPattern);
+					}
+					includeFilterDebounceTimer = null;
+				}, FILTER_HISTORY_DEBOUNCE_MS);
+			});
+			
+			// Keyboard navigation for include filter
+			filterInput.addEventListener('keydown', (e) => {
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					navigateIncludeFilterHistory('up');
+				} else if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					navigateIncludeFilterHistory('down');
+				} else if (e.key === 'Escape') {
+					if (includeHistoryDropdown && includeHistoryDropdown.style.display === 'block') {
+						includeHistoryDropdown.style.display = 'none';
+						selectedIncludeHistoryIndex = -1;
+					}
+				} else if (e.key === 'Enter' && selectedIncludeHistoryIndex >= 0 && includeHistoryDropdown && includeHistoryDropdown.style.display === 'block') {
+					e.preventDefault();
+					selectIncludeFilterHistoryItem(selectedIncludeHistoryIndex);
 				}
 			});
 		}
@@ -2532,6 +2666,51 @@ export function getWebviewContentHtml(cspSource: string): string {
 					lastRenderedLineIndex = -1;
 					renderLinesWithBuffer();
 				}
+				
+				// Debounce adding to history (5 seconds)
+				if (excludeFilterDebounceTimer) {
+					clearTimeout(excludeFilterDebounceTimer);
+				}
+				excludeFilterDebounceTimer = setTimeout(() => {
+					if (excludeFilterPattern && excludeFilterPattern.trim() !== '') {
+						addToExcludeFilterHistory(excludeFilterPattern);
+					}
+					excludeFilterDebounceTimer = null;
+				}, FILTER_HISTORY_DEBOUNCE_MS);
+			});
+			
+			// Keyboard navigation for exclude filter
+			excludeFilterInput.addEventListener('keydown', (e) => {
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					navigateExcludeFilterHistory('up');
+				} else if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					navigateExcludeFilterHistory('down');
+				} else if (e.key === 'Escape') {
+					if (excludeHistoryDropdown && excludeHistoryDropdown.style.display === 'block') {
+						excludeHistoryDropdown.style.display = 'none';
+						selectedExcludeHistoryIndex = -1;
+					}
+				} else if (e.key === 'Enter' && selectedExcludeHistoryIndex >= 0 && excludeHistoryDropdown && excludeHistoryDropdown.style.display === 'block') {
+					e.preventDefault();
+					selectExcludeFilterHistoryItem(selectedExcludeHistoryIndex);
+				}
+			});
+		}
+		
+		// History button event listeners
+		if (includeHistoryBtn) {
+			includeHistoryBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				toggleIncludeFilterHistoryDropdown();
+			});
+		}
+		
+		if (excludeHistoryBtn) {
+			excludeHistoryBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				toggleExcludeFilterHistoryDropdown();
 			});
 		}
 
@@ -2807,7 +2986,228 @@ export function getWebviewContentHtml(cspSource: string): string {
 			    !historyBtn.contains(e.target)) {
 				historyDropdown.style.display = 'none';
 			}
+			if (includeHistoryDropdown && includeHistoryBtn && 
+			    !includeHistoryDropdown.contains(e.target) && 
+			    !includeHistoryBtn.contains(e.target) &&
+			    !filterInput.contains(e.target)) {
+				includeHistoryDropdown.style.display = 'none';
+			}
+			if (excludeHistoryDropdown && excludeHistoryBtn && 
+			    !excludeHistoryDropdown.contains(e.target) && 
+			    !excludeHistoryBtn.contains(e.target) &&
+			    !excludeFilterInput.contains(e.target)) {
+				excludeHistoryDropdown.style.display = 'none';
+			}
 		});
+		
+		// Filter history management functions
+		function addToIncludeFilterHistory(filter) {
+			if (!filter || filter.trim() === '') {
+				return; // Don't add empty filters
+			}
+			const trimmedFilter = filter.trim();
+			
+			// Remove if already exists (to move to top and avoid duplicates)
+			const index = includeFilterHistory.indexOf(trimmedFilter);
+			if (index > -1) {
+				includeFilterHistory.splice(index, 1);
+			}
+			// Add to beginning
+			includeFilterHistory.unshift(trimmedFilter);
+			// Limit to MAX_FILTER_HISTORY items
+			if (includeFilterHistory.length > MAX_FILTER_HISTORY) {
+				includeFilterHistory = includeFilterHistory.slice(0, MAX_FILTER_HISTORY);
+			}
+			// Save to extension
+			vscode.postMessage({ command: 'updateIncludeFilterHistory', history: includeFilterHistory });
+		}
+		
+		function addToExcludeFilterHistory(filter) {
+			if (!filter || filter.trim() === '') {
+				return; // Don't add empty filters
+			}
+			const trimmedFilter = filter.trim();
+			
+			// Remove if already exists (to move to top and avoid duplicates)
+			const index = excludeFilterHistory.indexOf(trimmedFilter);
+			if (index > -1) {
+				excludeFilterHistory.splice(index, 1);
+			}
+			// Add to beginning
+			excludeFilterHistory.unshift(trimmedFilter);
+			// Limit to MAX_FILTER_HISTORY items
+			if (excludeFilterHistory.length > MAX_FILTER_HISTORY) {
+				excludeFilterHistory = excludeFilterHistory.slice(0, MAX_FILTER_HISTORY);
+			}
+			// Save to extension
+			vscode.postMessage({ command: 'updateExcludeFilterHistory', history: excludeFilterHistory });
+		}
+		
+		function renderIncludeFilterHistoryDropdown() {
+			if (!includeHistoryDropdown) return;
+			
+			includeHistoryDropdown.innerHTML = '';
+			selectedIncludeHistoryIndex = -1;
+			
+			if (includeFilterHistory.length === 0) {
+				const emptyItem = document.createElement('div');
+				emptyItem.className = 'history-item empty';
+				emptyItem.textContent = 'No history';
+				includeHistoryDropdown.appendChild(emptyItem);
+			} else {
+				includeFilterHistory.forEach((filter, index) => {
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					item.setAttribute('data-index', index.toString());
+					item.textContent = filter;
+					item.title = filter;
+					item.addEventListener('click', () => {
+						selectIncludeFilterHistoryItem(index);
+					});
+					item.addEventListener('mouseenter', () => {
+						selectedIncludeHistoryIndex = index;
+						updateIncludeFilterHistorySelection();
+					});
+					includeHistoryDropdown.appendChild(item);
+				});
+			}
+		}
+		
+		function renderExcludeFilterHistoryDropdown() {
+			if (!excludeHistoryDropdown) return;
+			
+			excludeHistoryDropdown.innerHTML = '';
+			selectedExcludeHistoryIndex = -1;
+			
+			if (excludeFilterHistory.length === 0) {
+				const emptyItem = document.createElement('div');
+				emptyItem.className = 'history-item empty';
+				emptyItem.textContent = 'No history';
+				excludeHistoryDropdown.appendChild(emptyItem);
+			} else {
+				excludeFilterHistory.forEach((filter, index) => {
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					item.setAttribute('data-index', index.toString());
+					item.textContent = filter;
+					item.title = filter;
+					item.addEventListener('click', () => {
+						selectExcludeFilterHistoryItem(index);
+					});
+					item.addEventListener('mouseenter', () => {
+						selectedExcludeHistoryIndex = index;
+						updateExcludeFilterHistorySelection();
+					});
+					excludeHistoryDropdown.appendChild(item);
+				});
+			}
+		}
+		
+		function updateIncludeFilterHistorySelection() {
+			if (!includeHistoryDropdown) return;
+			const items = includeHistoryDropdown.querySelectorAll('.history-item:not(.empty)');
+			items.forEach((item, index) => {
+				if (index === selectedIncludeHistoryIndex) {
+					item.classList.add('selected');
+					item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				} else {
+					item.classList.remove('selected');
+				}
+			});
+		}
+		
+		function updateExcludeFilterHistorySelection() {
+			if (!excludeHistoryDropdown) return;
+			const items = excludeHistoryDropdown.querySelectorAll('.history-item:not(.empty)');
+			items.forEach((item, index) => {
+				if (index === selectedExcludeHistoryIndex) {
+					item.classList.add('selected');
+					item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				} else {
+					item.classList.remove('selected');
+				}
+			});
+		}
+		
+		function selectIncludeFilterHistoryItem(index) {
+			if (index >= 0 && index < includeFilterHistory.length) {
+				filterInput.value = includeFilterHistory[index];
+				filterPattern = includeFilterHistory[index];
+				includeHistoryDropdown.style.display = 'none';
+				selectedIncludeHistoryIndex = -1;
+				filterInput.focus();
+				// Trigger filter update
+				needsFullRender = true;
+				lastRenderedLineIndex = -1;
+				renderLinesWithBuffer();
+			}
+		}
+		
+		function selectExcludeFilterHistoryItem(index) {
+			if (index >= 0 && index < excludeFilterHistory.length) {
+				excludeFilterInput.value = excludeFilterHistory[index];
+				excludeFilterPattern = excludeFilterHistory[index];
+				excludeHistoryDropdown.style.display = 'none';
+				selectedExcludeHistoryIndex = -1;
+				excludeFilterInput.focus();
+				// Trigger filter update
+				needsFullRender = true;
+				lastRenderedLineIndex = -1;
+				renderLinesWithBuffer();
+			}
+		}
+		
+		function navigateIncludeFilterHistory(direction) {
+			if (!includeHistoryDropdown || includeHistoryDropdown.style.display === 'none' || !includeHistoryDropdown.style.display) {
+				renderIncludeFilterHistoryDropdown();
+				includeHistoryDropdown.style.display = 'block';
+				selectedIncludeHistoryIndex = 0;
+			} else {
+				if (direction === 'up') {
+					selectedIncludeHistoryIndex = Math.max(0, selectedIncludeHistoryIndex - 1);
+				} else if (direction === 'down') {
+					selectedIncludeHistoryIndex = Math.min(includeFilterHistory.length - 1, selectedIncludeHistoryIndex + 1);
+				}
+			}
+			updateIncludeFilterHistorySelection();
+		}
+		
+		function navigateExcludeFilterHistory(direction) {
+			if (!excludeHistoryDropdown || excludeHistoryDropdown.style.display === 'none' || !excludeHistoryDropdown.style.display) {
+				renderExcludeFilterHistoryDropdown();
+				excludeHistoryDropdown.style.display = 'block';
+				selectedExcludeHistoryIndex = 0;
+			} else {
+				if (direction === 'up') {
+					selectedExcludeHistoryIndex = Math.max(0, selectedExcludeHistoryIndex - 1);
+				} else if (direction === 'down') {
+					selectedExcludeHistoryIndex = Math.min(excludeFilterHistory.length - 1, selectedExcludeHistoryIndex + 1);
+				}
+			}
+			updateExcludeFilterHistorySelection();
+		}
+		
+		function toggleIncludeFilterHistoryDropdown() {
+			if (!includeHistoryDropdown || !includeHistoryBtn) return;
+			
+			if (includeHistoryDropdown.style.display === 'none' || !includeHistoryDropdown.style.display) {
+				renderIncludeFilterHistoryDropdown();
+				includeHistoryDropdown.style.display = 'block';
+			} else {
+				includeHistoryDropdown.style.display = 'none';
+			}
+		}
+		
+		function toggleExcludeFilterHistoryDropdown() {
+			if (!excludeHistoryDropdown || !excludeHistoryBtn) return;
+			
+			if (excludeHistoryDropdown.style.display === 'none' || !excludeHistoryDropdown.style.display) {
+				renderExcludeFilterHistoryDropdown();
+				excludeHistoryDropdown.style.display = 'block';
+			} else {
+				excludeHistoryDropdown.style.display = 'none';
+			}
+		}
 
 		sendBtn.addEventListener('click', () => {
 			const data = sendInput.value.trim();
@@ -3009,11 +3409,41 @@ export function getWebviewContentHtml(cspSource: string): string {
 					
 					updateUI();
 					break;
+
+				case 'setElfFile':
+					if (selectElfBtn) {
+						if (!message.path || !message.name) {
+							// Reset state
+							selectElfBtn.textContent = 'Load ELF File';
+							selectElfBtn.title = 'Load ELF File (Right-click to clear)';
+						} else {
+							const name = message.name || 'Unknown';
+							const path = message.path || '';
+							const date = message.date ? new Date(message.date).toLocaleString() : 'Unknown';
+							selectElfBtn.textContent = 'ELF: ' + name;
+							selectElfBtn.title = path + '\\nLast Modified: ' + date + '\\n(Right-click to clear)';
+						}
+					}
+					break;
 					
 				case 'messageHistoryLoaded':
 					if (message.history && Array.isArray(message.history)) {
 						messageHistory = [...message.history]; // Create a copy to avoid reference issues
 						console.log('FancyMon: Loaded message history:', messageHistory.length, 'items:', messageHistory);
+					}
+					break;
+					
+				case 'includeFilterHistoryLoaded':
+					if (message.history && Array.isArray(message.history)) {
+						includeFilterHistory = [...message.history];
+						console.log('FancyMon: Loaded include filter history:', includeFilterHistory.length, 'items:', includeFilterHistory);
+					}
+					break;
+					
+				case 'excludeFilterHistoryLoaded':
+					if (message.history && Array.isArray(message.history)) {
+						excludeFilterHistory = [...message.history];
+						console.log('FancyMon: Loaded exclude filter history:', excludeFilterHistory.length, 'items:', excludeFilterHistory);
 					}
 					break;
 				case 'connected':
