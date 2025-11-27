@@ -65,6 +65,21 @@ None at this time. If you encounter any issues, please report them on the extens
 
 ## Release Notes
 
+### 0.0.3
+
+Major feature update bringing advanced debugging and plotting capabilities:
+- **Enhanced Plotting**: Switched to Plotly.js for more interactive and powerful real-time plotting with zoom, pan, and better performance.
+- **ELF Address Resolution**: Automatically resolves hex addresses (e.g., stack traces) to function names, file paths, and line numbers using `addr2line`.
+- **Toolchain Auto-discovery**: Automatically detects ESP-IDF toolchain paths for symbol resolution without manual configuration.
+- **Filter History**: Added persistent history dropdowns for "Include" and "Exclude" filters with smart debouncing (saved after 5 seconds).
+- **UI Improvements**: Optimized control layout and filter input responsiveness.
+
+### 0.0.2
+
+- **Architecture Update**: Extension now runs in the UI process for better Webview compatibility.
+- **Serial Communication**: Reverted to native `serialport` for improved reliability and performance compared to Web Serial API.
+- **Bug Fixes**: Addressed issues with port listing and connection stability.
+
 ### 0.0.1
 
 Initial release of FancyMon Serial Monitor with:
