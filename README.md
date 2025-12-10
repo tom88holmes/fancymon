@@ -65,6 +65,15 @@ None at this time. If you encounter any issues, please report them on the extens
 
 ## Release Notes
 
+### 0.0.5
+
+Enhanced plotting capabilities with dual Y-axis support and improved variable management:
+- **Dual Y-Axis Plotting**: Added support for two independent Y-axes (Y1 and Y2) with separate legends positioned at top-left and top-right.
+- **Custom Variable Names**: Added text input fields for each variable to allow custom naming (defaults to extracted number value).
+- **Performance Optimization**: Optimized regex pattern matching to share a single pattern for multiple variables from the same line, significantly improving performance when tracking many variables.
+- **UI Improvements**: Improved spacing and layout of variable selection controls, with bold variable indices and cleaner presentation.
+- **Auto-selection**: Automatically selects Y1 axis when user starts typing a custom variable name.
+
 ### 0.0.4
 
 Major feature update bringing advanced debugging and plotting capabilities:

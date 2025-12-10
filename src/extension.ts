@@ -8,7 +8,7 @@ let serialMonitor: any = undefined;
 console.log('FancyMon: Module file is being loaded!');
 
 export function activate(context: vscode.ExtensionContext) {
-	console.log('=== FancyMon extension ACTIVATING (v0.0.4 - ELF Support) ===');
+	console.log('=== FancyMon extension ACTIVATING (v0.0.5 - Dual Y-Axis Plotting) ===');
 	console.log('Extension context:', context.extensionPath);
 	console.log('Extension URI:', context.extensionUri.toString());
 	

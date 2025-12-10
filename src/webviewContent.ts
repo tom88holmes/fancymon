@@ -33,6 +33,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			display: flex;
 			flex-direction: column;
 		}
+		
+		/* Ensure no hidden margins on labels or inputs */
+		label, input, span {
+			margin: 0;
+			padding: 0;
+		}
 
 		.controls {
 			display: flex;
@@ -492,7 +498,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		.variables-list {
 			display: flex;
-			flex-direction: column;
+			flex-wrap: wrap;
 			gap: 5px;
 			margin-top: 10px;
 		}
@@ -500,16 +506,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 		.variable-item {
 			display: flex;
 			align-items: center;
-			gap: 10px;
-			padding: 5px 10px;
+			gap: 5px;
+			padding: 2px 8px;
 			background-color: var(--vscode-input-background);
 			border: 1px solid var(--vscode-input-border);
 			border-radius: 2px;
+			flex: 0 1 auto;
 		}
 
 		.variable-item .variable-name {
 			font-weight: bold;
-			min-width: 150px;
+			font-size: 11px;
 		}
 
 		.variable-item .variable-pattern {
@@ -522,7 +529,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		.variable-item .variable-count {
 			font-size: 11px;
 			color: var(--vscode-descriptionForeground);
-			min-width: 80px;
+			min-width: 60px;
 		}
 
 		.plot-container {
@@ -828,7 +835,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let isPlotPaused = false;
 		const MAX_PLOT_POINTS = 10000; // Maximum number of data points per variable
 		let currentActiveTab = 'monitor';
-		let selectedNumbers = new Set(); // Track which number indices are selected
+		let selectedNumbers = new Map(); // Track which number indices are selected and their axis ('y' or 'y2')
 		let extractedNumbers = []; // Current extracted numbers from pattern input
 
 		// Tab switching
@@ -874,6 +881,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				x: variable.data.map(d => d.time),
 				y: variable.data.map(d => d.value),
 				name: variable.name,
+				yaxis: variable.axis === 'y2' ? 'y2' : 'y',
+				legend: variable.axis === 'y2' ? 'legend2' : 'legend',
 				type: 'scatter',
 				mode: 'lines',
 				line: {
@@ -903,7 +912,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				},
 				yaxis: {
 					title: {
-						text: 'Value',
+						text: 'Y1',
 						font: {
 							color: 'var(--vscode-foreground)'
 						}
@@ -912,21 +921,52 @@ export function getWebviewContentHtml(cspSource: string): string {
 					zerolinecolor: 'var(--vscode-panel-border)',
 					color: 'var(--vscode-foreground)'
 				},
+				yaxis2: {
+					title: {
+						text: 'Y2',
+						font: {
+							color: 'var(--vscode-foreground)'
+						},
+						standoff: 15
+					},
+					gridcolor: 'transparent',
+					zerolinecolor: 'transparent',
+					color: 'var(--vscode-foreground)',
+					overlaying: 'y',
+					side: 'right'
+				},
 				plot_bgcolor: 'var(--vscode-textCodeBlock-background)',
 				paper_bgcolor: 'var(--vscode-textCodeBlock-background)',
 				font: {
 					color: 'var(--vscode-foreground)'
 				},
+				// Legend for Y1 (Left)
 				legend: {
+					orientation: 'h',
 					x: 0,
-					y: 1,
+					y: 1.15,
+					xanchor: 'left',
+					yanchor: 'bottom',
 					bgcolor: 'transparent',
 					bordercolor: 'var(--vscode-panel-border)',
 					font: {
 						color: 'var(--vscode-foreground)'
 					}
 				},
-				margin: { l: 60, r: 30, t: 50, b: 50 },
+				// Legend for Y2 (Right)
+				legend2: {
+					orientation: 'h',
+					x: 1,
+					y: 1.15,
+					xanchor: 'right',
+					yanchor: 'bottom',
+					bgcolor: 'transparent',
+					bordercolor: 'var(--vscode-panel-border)',
+					font: {
+						color: 'var(--vscode-foreground)'
+					}
+				},
+				margin: { l: 60, r: 60, t: 80, b: 50 },
 				hovermode: 'x unified'
 			};
 
@@ -1019,19 +1059,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return matches;
 		}
 
-		// Generate regex pattern for a specific number index
-		function generatePatternForNumber(text, numberIndex) {
+		// Generate regex pattern that captures ALL numbers in the text
+		// This allows one regex to serve multiple variables
+		function generateCommonPattern(text) {
 			const numbers = extractNumbers(text);
-			if (numberIndex < 1 || numberIndex > numbers.length) {
-				return null;
-			}
-
-			const targetNumber = numbers[numberIndex - 1];
-			const targetStart = targetNumber.position;
-			const targetEnd = targetNumber.position + targetNumber.text.length;
+			if (numbers.length === 0) return null;
 			
 			// Escape special regex characters (but preserve the number position)
-			// Escape characters one by one to avoid template literal parsing issues
 			function escapeRegexChars(str) {
 				let result = '';
 				for (let i = 0; i < str.length; i++) {
@@ -1047,8 +1081,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return result;
 			}
 			
-			// Build pattern by processing text character by character
-			// Replace all numbers except the target with generic number patterns
 			let pattern = '';
 			let pos = 0;
 			
@@ -1062,19 +1094,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 					pattern += escapeRegexChars(textBefore);
 				}
 				
-				// Add pattern for this number
-				if (num === targetNumber) {
-					// Target number: use capture group
-					pattern += '(-?\\\\d+\\\\.?\\\\d*)';
-				} else {
-					// Other numbers: use generic number pattern (allow any number)
-					// Check if it's a decimal number
-					if (num.text.includes('.')) {
-						pattern += '-?\\\\d+\\\\.?\\\\d*';
-					} else {
-						pattern += '-?\\\\d+';
-					}
-				}
+				// Add capture group for this number
+				// Always capture every number
+				pattern += '(-?\\\\d+\\\\.?\\\\d*)';
 				
 				pos = num.position + num.text.length;
 			}
@@ -1085,29 +1107,54 @@ export function getWebviewContentHtml(cspSource: string): string {
 				pattern += escapeRegexChars(textAfter);
 			}
 			
-			return pattern;
+			return { pattern, sortedNumbers };
+		}
+		
+		// Legacy function wrapper for compatibility if needed elsewhere
+		function generatePatternForNumber(text, numberIndex) {
+			const result = generateCommonPattern(text);
+			if (!result) return null;
+			return result.pattern;
 		}
 
-		// Extract variable name from pattern (non-number text before the number)
+		// Extract variable name from pattern (just the number text itself)
 		function extractVariableName(text, numberIndex) {
 			const numbers = extractNumbers(text);
 			if (numberIndex < 1 || numberIndex > numbers.length) {
 				return 'variable' + numberIndex;
 			}
-
-			const targetNumber = numbers[numberIndex - 1];
-			const beforeNumber = text.substring(0, targetNumber.position).trim();
-			// Extract last word or meaningful text before the number
-			const words = beforeNumber.split(new RegExp('[\\s\\W]+', 'g')).filter(w => w.length > 0);
-			if (words.length > 0) {
-				const lastWord = words[words.length - 1];
-				// Clean up the word
-				const cleanWord = lastWord.replace(new RegExp('[^a-zA-Z0-9]', 'g'), '');
-				if (cleanWord.length > 0) {
-					return cleanWord + ':' + numberIndex;
+			
+			// Check if there is a custom name entered in the UI
+			// We need to look up the input field for this number index
+			// IMPORTANT: The UI uses the index from the FILTERED list (extractedNumbers),
+			// but we are passed the original index.
+			// However, in updateExtractionPreview, we map extractedNumbers to have 'index' property
+			// which IS the original index? No, let's check updateExtractionPreview.
+			
+			// In updateExtractionPreview:
+			// extractedNumbers = extractedNumbers.map((num, idx) => ({ ...num, index: idx + 1, originalIndex: num.index }));
+			// So num.index (the displayed index) is 1, 2, 3... corresponding to the filtered list position.
+			// And num.originalIndex is the index in the full list.
+			
+			// The input field has data-index set to num.index (the filtered list index).
+			// But addVariableToPlot calls this with originalIndex.
+			
+			// So we need to find the filtered list index corresponding to this originalIndex.
+			if (numberSelector && typeof extractedNumbers !== 'undefined') {
+				// Find the item in extractedNumbers that matches this originalIndex
+				const item = extractedNumbers.find(n => (n.originalIndex || n.index) === numberIndex);
+				if (item) {
+					// The UI index is item.index
+					const selector = 'input[type="text"][data-index="' + item.index + '"]';
+					const nameInput = numberSelector.querySelector(selector);
+					if (nameInput && nameInput.value.trim().length > 0) {
+						return nameInput.value.trim();
+					}
 				}
 			}
-			return 'value' + numberIndex;
+
+			const targetNumber = numbers[numberIndex - 1];
+			return targetNumber.text;
 		}
 
 		// Update extraction preview
@@ -1215,26 +1262,114 @@ export function getWebviewContentHtml(cspSource: string): string {
 				// Update number selector checkboxes
 				numberSelector.innerHTML = '';
 				extractedNumbers.forEach(num => {
-					const checkboxDiv = document.createElement('div');
-					checkboxDiv.className = 'number-checkbox';
-					const checkbox = document.createElement('input');
-					checkbox.type = 'checkbox';
-					checkbox.id = 'num-' + num.index;
-					checkbox.value = num.index;
-					checkbox.addEventListener('change', () => {
-						if (checkbox.checked) {
-							selectedNumbers.add(num.index);
+					const rowDiv = document.createElement('div');
+					rowDiv.className = 'number-selection-row';
+					rowDiv.style.display = 'flex';
+					rowDiv.style.alignItems = 'center';
+					rowDiv.style.marginBottom = '5px';
+
+					// Variable label
+					const label = document.createElement('span');
+					label.innerHTML = '<b>' + num.index + ':</b> ';
+					label.style.marginRight = '5px';
+					label.style.minWidth = '30px';
+					rowDiv.appendChild(label);
+
+					// Custom Name Input
+					const nameInput = document.createElement('input');
+					nameInput.type = 'text';
+					nameInput.placeholder = num.text; // Use extracted number as placeholder
+					nameInput.style.width = '120px';
+					nameInput.style.marginRight = '5px';
+					nameInput.style.fontSize = '11px';
+					nameInput.dataset.index = num.index; // Store index to retrieve later
+					
+					// Auto-select Y1 when user types in name, if not already selected
+					nameInput.addEventListener('input', () => {
+						if (nameInput.value.trim().length > 0) {
+							if (!y1Check.checked && !y2Check.checked) {
+								y1Check.checked = true;
+								updateSelection();
+							}
+						}
+					});
+					
+					rowDiv.appendChild(nameInput);
+
+					// Container for Y1 and Y2 to keep them close
+					const checkboxesContainer = document.createElement('div');
+					checkboxesContainer.style.display = 'inline-flex'; // Use inline-flex to minimize width
+					checkboxesContainer.style.alignItems = 'center';
+					checkboxesContainer.style.gap = '5px'; // Explicit gap between Y1 and Y2 groups
+					checkboxesContainer.style.marginLeft = '5px'; // Small gap from the name input
+
+					// Y1 Checkbox Group
+					const y1Label = document.createElement('label');
+					y1Label.style.display = 'flex';
+					y1Label.style.alignItems = 'center';
+					y1Label.style.cursor = 'pointer';
+					y1Label.style.margin = '0';
+					y1Label.style.padding = '0';
+					y1Label.style.minWidth = '0'; // Override global label min-width
+					y1Label.style.width = 'auto'; // Ensure width is auto
+					
+					const y1Check = document.createElement('input');
+					y1Check.type = 'checkbox';
+					y1Check.style.margin = '0 2px 0 0'; // Right margin only
+					y1Check.style.padding = '0';
+					y1Check.checked = false;
+					
+					y1Label.appendChild(y1Check);
+					y1Label.appendChild(document.createTextNode('Y1'));
+					checkboxesContainer.appendChild(y1Label);
+
+					// Y2 Checkbox Group
+					const y2Label = document.createElement('label');
+					y2Label.style.display = 'flex';
+					y2Label.style.alignItems = 'center';
+					y2Label.style.cursor = 'pointer';
+					y2Label.style.margin = '0 20px 0 0'; // Add spacing AFTER Y2 to separate from next variable
+					y2Label.style.padding = '0';
+					y2Label.style.minWidth = '0'; // Override global label min-width
+					y2Label.style.width = 'auto'; // Ensure width is auto
+
+					const y2Check = document.createElement('input');
+					y2Check.type = 'checkbox';
+					y2Check.style.margin = '0 2px 0 0'; // Right margin only
+					y2Check.style.padding = '0';
+					y2Check.checked = false;
+
+					y2Label.appendChild(y2Check);
+					y2Label.appendChild(document.createTextNode('Y2'));
+					checkboxesContainer.appendChild(y2Label);
+					
+					rowDiv.appendChild(checkboxesContainer);
+
+					// Logic to ensure mutual exclusivity and update selection
+					const updateSelection = () => {
+						if (y1Check.checked) {
+							y2Check.checked = false;
+							selectedNumbers.set(num.index, 'y');
+						} else if (y2Check.checked) {
+							y1Check.checked = false;
+							selectedNumbers.set(num.index, 'y2');
 						} else {
 							selectedNumbers.delete(num.index);
 						}
 						addVariableBtn.disabled = selectedNumbers.size === 0;
+					};
+
+					y1Check.addEventListener('change', () => {
+						if (y1Check.checked) y2Check.checked = false;
+						updateSelection();
 					});
-					const label = document.createElement('label');
-					label.htmlFor = 'num-' + num.index;
-					label.textContent = num.index + ': ' + num.text;
-					checkboxDiv.appendChild(checkbox);
-					checkboxDiv.appendChild(label);
-					numberSelector.appendChild(checkboxDiv);
+					
+					y2Check.addEventListener('change', () => {
+						if (y2Check.checked) y1Check.checked = false;
+						updateSelection();
+					});
+
+					numberSelector.appendChild(rowDiv);
 				});
 			}
 		}
@@ -1246,12 +1381,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const text = patternInput.value.trim();
 			if (!text) return;
 
-			selectedNumbers.forEach(numIndex => {
+			// Generate a common pattern that captures ALL numbers
+			const patternResult = generateCommonPattern(text);
+			if (!patternResult) return;
+			
+			const { pattern, sortedNumbers } = patternResult;
+			const regex = new RegExp(pattern);
+
+			selectedNumbers.forEach((axis, numIndex) => {
 				// Find the original index if numbers were filtered
 				const numObj = extractedNumbers.find(n => n.index === numIndex);
 				const originalIndex = numObj && numObj.originalIndex ? numObj.originalIndex : numIndex;
-				const pattern = generatePatternForNumber(text, originalIndex);
-				if (!pattern) return;
+				
+				// Find which capture group this corresponds to
+				// The capture group index is the (index in sortedNumbers) + 1
+				// sortedNumbers contains all numbers found in the text, sorted by position
+				// extractedNumbers might be a filtered subset, but originalIndex should match the index in extractNumbers(text)
+				// Wait, extractNumbers returns list in order found. sortedNumbers is sorted by position.
+				// For the pattern we built, the k-th number in sortedNumbers corresponds to capture group k+1.
+				
+				// We need to match the 'originalIndex' (which comes from extractNumbers) to the sorted position
+				// extractNumbers usually returns them in order, so sortedNumbers should be same order unless regex order differs from position order
+				// But let's be safe: find the number in sortedNumbers that has the same position/text/index
+				
+				const targetNumInSorted = sortedNumbers.find(n => n.index === originalIndex);
+				if (!targetNumInSorted) return;
+				
+				const captureIndex = sortedNumbers.indexOf(targetNumInSorted) + 1;
 
 				const name = extractVariableName(text, originalIndex);
 				const color = getNextColor(plotVariables.length);
@@ -1260,9 +1416,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 					id: Date.now() + '-' + numIndex,
 					name: name,
 					pattern: pattern,
-					regex: new RegExp(pattern),
+					regex: regex, // Re-use the same regex object? No, better new one or share string
+					// Actually, for caching in processLineForPlot, we key by pattern string.
+					// So it doesn't matter if regex object is different, as long as pattern string is same.
+					captureIndex: captureIndex,
 					data: [],
-					color: color
+					color: color,
+					axis: axis
 				};
 
 				plotVariables.push(variable);
@@ -1276,6 +1436,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 						x: [],
 						y: [],
 						name: variable.name,
+						yaxis: axis === 'y2' ? 'y2' : 'y',
+						legend: axis === 'y2' ? 'legend2' : 'legend',
 						type: 'scatter',
 						mode: 'lines',
 						line: {
@@ -1326,12 +1488,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 				
 				const nameSpan = document.createElement('span');
 				nameSpan.className = 'variable-name';
-				nameSpan.textContent = variable.name;
+				nameSpan.textContent = variable.name + (variable.axis === 'y2' ? ' (Y2)' : ' (Y1)');
 				nameSpan.style.color = variable.color;
 				
-				const patternSpan = document.createElement('span');
-				patternSpan.className = 'variable-pattern';
-				patternSpan.textContent = variable.pattern;
+				// Don't show pattern - too long
+				// const patternSpan = document.createElement('span');
+				// patternSpan.className = 'variable-pattern';
+				// patternSpan.textContent = variable.pattern;
 				
 				const countSpan = document.createElement('span');
 				countSpan.className = 'variable-count';
@@ -1345,7 +1508,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				});
 				
 				item.appendChild(nameSpan);
-				item.appendChild(patternSpan);
+				// item.appendChild(patternSpan);
 				item.appendChild(countSpan);
 				item.appendChild(removeBtn);
 				variablesList.appendChild(item);
@@ -1396,11 +1559,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (timeValue === null) return;
 
 			let chartNeedsUpdate = false;
+			
+			// Cache regex matches for variables sharing the same pattern
+			// Map pattern string -> Match result (or null if no match)
+			const matchCache = new Map();
+			
 			plotVariables.forEach((variable, index) => {
 				try {
-					const match = variable.regex.exec(plainText);
-					if (match && match[1]) {
-						const value = parseFloat(match[1]);
+					let match;
+					
+					// Optimization: Check cache first
+					if (matchCache.has(variable.pattern)) {
+						match = matchCache.get(variable.pattern);
+					} else {
+						// Execute regex and cache result
+						// If variable.regex is missing (legacy), create it
+						if (!variable.regex) {
+							variable.regex = new RegExp(variable.pattern);
+						}
+						match = variable.regex.exec(plainText);
+						matchCache.set(variable.pattern, match);
+					}
+					
+					// Use specific capture group index if available (new logic), otherwise default to 1 (legacy)
+					const captureIndex = variable.captureIndex || 1;
+					
+					if (match && match[captureIndex]) {
+						const value = parseFloat(match[captureIndex]);
 						if (!isNaN(value)) {
 							variable.data.push({ time: timeValue, value: value });
 							
