@@ -1666,11 +1666,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 					// If we're in RTC mode, deterministically strip the bracketed datetime token so it never shows up as a variable.
 					// This is robust even if the user's regex is malformed (e.g. missing escapes).
+					let rtcMatchEnd = 0;
 					if (axisMode === 'rtc') {
 						const seg = tryParseBracketedRtcDatetime(plainText);
 						if (seg) {
 							timeValue = seg.inner;
-							timeMatchEnd = seg.matchEnd;
+							rtcMatchEnd = seg.matchEnd;
+							timeMatchEnd = rtcMatchEnd; // Set initial value from RTC parser
 						}
 					}
 
@@ -1678,14 +1680,27 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// Accepting match[0] is dangerous: if the user accidentally types an unescaped '[',
 					// the regex can degrade into a character class and "match" a single character inside the datetime,
 					// which would make us treat most of the datetime as plot variables.
+					// In RTC mode, only use the user's regex if it matches at least as much as the RTC parser found.
 					const regex = tryCreateTimeRegex();
 					if (regex) {
 						const match = regex.exec(plainText);
 						if (match) {
 							const capturedValue = match[2] ?? match[1] ?? null;
 							if (capturedValue !== null) {
-								timeValue = String(capturedValue);
-								timeMatchEnd = match.index + match[0].length;
+								const userMatchEnd = match.index + match[0].length;
+								// In RTC mode: only use user's regex if it matches at least as much as RTC parser
+								// This prevents malformed regexes from overriding the correct RTC match
+								if (axisMode === 'rtc' && rtcMatchEnd > 0) {
+									if (userMatchEnd >= rtcMatchEnd) {
+										timeValue = String(capturedValue);
+										timeMatchEnd = userMatchEnd;
+									}
+									// Otherwise, keep the RTC parser's timeMatchEnd
+								} else {
+									// Uptime mode: use user's regex match
+									timeValue = String(capturedValue);
+									timeMatchEnd = userMatchEnd;
+								}
 							}
 						}
 					}
