@@ -351,6 +351,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 			color: var(--vscode-list-activeSelectionForeground);
 		}
 
+		.history-separator {
+			padding: 6px 10px;
+			font-size: 10px;
+			color: var(--vscode-descriptionForeground);
+			border-bottom: 1px solid var(--vscode-dropdown-border);
+			letter-spacing: 0.5px;
+			text-transform: uppercase;
+			cursor: default;
+			user-select: none;
+		}
+
+		.history-item.pinned {
+			font-weight: 600;
+		}
+
 		.status {
 			font-size: 11px;
 			color: var(--vscode-descriptionForeground);
@@ -667,8 +682,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 		<div class="plot-controls">
 			<div class="plot-control-row">
 				<label>Time Pattern (X-axis):</label>
-				<input type="text" id="timePatternInput" placeholder="Regex pattern for time value (e.g., \\(([0-9]+)\\))" value="\\(([0-9]+)\\)">
-				<span style="font-size: 11px; color: var(--vscode-descriptionForeground);">Extracts uptime from parentheses</span>
+				<div class="time-pattern-wrapper" style="flex: 1; position: relative; display: flex; z-index: 1001; overflow: visible;">
+					<button id="timePatternHistoryBtn" class="history-btn" title="Time pattern history">▼</button>
+					<input type="text" id="timePatternInput" placeholder="Regex pattern for time value (e.g., \\(([0-9]+)\\))" value="\\(([0-9]+)\\)" style="flex: 1; min-width: 200px; border-left: none; border-radius: 0 2px 2px 0;">
+					<div id="timePatternHistoryDropdown" class="history-dropdown filter-dropdown" style="display: none;"></div>
+				</div>
+				<span id="timePatternHint" style="font-size: 11px; color: var(--vscode-descriptionForeground);">Extracts uptime from parentheses</span>
 			</div>
 			<div class="plot-control-row">
 				<label>Pattern Input:</label>
@@ -775,6 +794,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const includeHistoryDropdown = document.getElementById('includeHistoryDropdown');
 		const excludeHistoryDropdown = document.getElementById('excludeHistoryDropdown');
 		const testBacktraceBtn = document.getElementById('testBacktraceBtn');
+		const timePatternHistoryBtn = document.getElementById('timePatternHistoryBtn');
+		const timePatternHistoryDropdown = document.getElementById('timePatternHistoryDropdown');
+		const timePatternHint = document.getElementById('timePatternHint');
 		
 		let maxLines = 10000;
 		let lineCount = 0;
@@ -792,6 +814,34 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const MAX_FILTER_HISTORY = 30;
 		let selectedIncludeHistoryIndex = -1;
 		let selectedExcludeHistoryIndex = -1;
+
+		// Time pattern history (most recent first, max 30 items)
+		let timePatternHistory = [];
+		const MAX_TIME_PATTERN_HISTORY = 30;
+		let selectedTimePatternHistoryIndex = -1;
+		let timePatternDebounceTimer = null;
+		const TIME_PATTERN_HISTORY_DEBOUNCE_MS = 5000;
+		let timePatternDropdownItems = []; // Flattened list of selectable items (recent + pinned)
+
+		// Pinned time patterns (always visible at bottom of dropdown)
+		// IMPORTANT: These strings are what the user should type into the input (single backslashes),
+		// i.e. \d means "digit" in RegExp, and \[ means "literal ["
+		const DEFAULT_UPTIME_TIME_PATTERN = '\\(([0-9]+)\\)';
+		const RTC_DATETIME_TIME_PATTERN = '\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\]';
+		const PINNED_TIME_PATTERNS = [
+			{
+				label: 'RTC datetime [YYYY-MM-DD HH:MM:SS.mmm]',
+				pattern: RTC_DATETIME_TIME_PATTERN,
+				hint: 'Extracts RTC datetime from brackets'
+			},
+			{
+				label: 'Uptime (ticks) (####)',
+				pattern: DEFAULT_UPTIME_TIME_PATTERN,
+				hint: 'Extracts uptime from parentheses'
+			}
+		];
+
+		let currentTimeAxisMode = 'uptime'; // 'uptime' | 'rtc'
 		
 		// Debounce timers for filter history (5 seconds)
 		let includeFilterDebounceTimer = null;
@@ -838,6 +888,296 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let selectedNumbers = new Map(); // Track which number indices are selected and their axis ('y' or 'y2')
 		let extractedNumbers = []; // Current extracted numbers from pattern input
 
+		function normalizeTimePatternInputValue(pattern) {
+			// Our pinned patterns used to be incorrectly double-escaped (e.g. "\\\\d{4}" shown as "\\d{4}" in the UI).
+			// Normalize common escapes so they behave as real regex tokens when fed to 'new RegExp(...)'.
+			let p = (pattern || '').trim();
+			// IMPORTANT: Avoid regex literals here. Some patterns (notably ones containing '[')
+			// can accidentally become invalid RegExp literals after template-string escaping,
+			// causing a *parse-time* webview crash ("Invalid regular expression: missing /").
+			// Use literal string replacements instead.
+			p = p.split('\\\\\\\\d').join('\\\\d');
+			p = p.split('\\\\\\\\s').join('\\\\s');
+			p = p.split('\\\\\\\\t').join('\\\\t');
+			p = p.split('\\\\\\\\r').join('\\\\r');
+			p = p.split('\\\\\\\\n').join('\\\\n');
+			p = p.split('\\\\\\\\[').join('\\\\[');
+			p = p.split('\\\\\\\\]').join('\\\\]');
+			p = p.split('\\\\\\\\(').join('\\\\(');
+			p = p.split('\\\\\\\\)').join('\\\\)');
+			p = p.split('\\\\\\\\.').join('\\\\.');
+			p = p.split('\\\\\\\\+').join('\\\\+');
+			p = p.split('\\\\\\\\*').join('\\\\*');
+			p = p.split('\\\\\\\\?').join('\\\\?');
+			p = p.split('\\\\\\\\{').join('\\\\{');
+			p = p.split('\\\\\\\\}').join('\\\\}');
+
+			// Heuristic auto-fix: if this looks like the RTC datetime pattern but '[' / ']' aren't escaped,
+			// escape them so the regex matches literal brackets instead of starting a character class.
+			// Also support the common "missing backslash" form: d{4}-d{2}-... (caused by editing issues).
+			//
+			// IMPORTANT: Avoid regex literals with backslashes inside the webview HTML template string.
+			// They are extremely easy to break via template-string escaping and can crash the webview at parse-time.
+			const looksLikeRtc = p.includes('\\d{4}-\\d{2}-\\d{2}') && p.includes('\\d{2}:\\d{2}:\\d{2}');
+			const looksLikeRtcLoose = p.includes('d{4}-d{2}-d{2}') && p.includes('d{2}:d{2}:d{2}');
+			
+			// Also check for patterns that start with '[' and contain date/time patterns (user might have typed it literally)
+			// This catches patterns like "[(d{4}-d{2}-d{2} d{2}:d{2}:d{2}.d{3})]"
+			const looksLikeRtcWithBrackets = (p.startsWith('[') || p.includes('[')) && 
+				(p.includes('d{4}') || p.includes('\\d{4}')) && 
+				(p.includes('d{2}:') || p.includes('\\d{2}:') || p.includes('d{2}-') || p.includes('\\d{2}-'));
+
+
+			// Step 1: Convert d{N} -> \d{N} FIRST (before escaping brackets, so we can detect the pattern correctly)
+			// Always convert d{N} to \d{N} if it exists and isn't already escaped
+			// Check more carefully: look for actual d{ pattern, not just any \d
+			// Avoid regex literals - check manually if d{ exists without preceding backslash
+			let hasUnescapedD = false;
+			for (let i = 0; i < p.length - 1; i++) {
+				if (p[i] === 'd' && p[i + 1] === '{' && (i === 0 || p[i - 1] !== '\\\\')) {
+					hasUnescapedD = true;
+					break;
+				}
+			}
+			// Check more carefully: look for actual \d{ pattern (backslash directly before d{)
+			// Not just any backslash somewhere before d{ (like \.d{ which has \. not \d{)
+			let hasEscapedD = false;
+			for (let i = 0; i < p.length - 2; i++) {
+				if (p[i] === '\\\\' && p[i + 1] === 'd' && p[i + 2] === '{') {
+					hasEscapedD = true;
+					break;
+				}
+			}
+			
+			if (hasUnescapedD && !hasEscapedD) {
+				// Convert d{N} -> \d{N} when it's not already escaped.
+				// (Implemented without regex literals to avoid template-string escaping issues.)
+				let out = '';
+				for (let i = 0; i < p.length; i++) {
+					const ch = p[i];
+					// Detect "d{<digits>}" with no preceding backslash.
+					// NOTE: This code lives inside the webview HTML template string, so backslashes must be doubled.
+					// We want to compare against a single backslash character at runtime, which in JS source is '\\'.
+					// Check if previous char is NOT a backslash (or we're at start)
+					// In template literal: '\\\\' in source = '\' at runtime (one backslash)
+					// p[i-1] is a single char, so compare to '\\\\' which becomes '\' at runtime
+					const prevIsBackslash = i > 0 && p[i - 1] === '\\\\';
+					if (ch === 'd' && p[i + 1] === '{' && !prevIsBackslash) {
+						let j = i + 2;
+						let digits = '';
+						while (j < p.length && p[j] >= '0' && p[j] <= '9') {
+							digits += p[j];
+							j++;
+						}
+						if (digits.length > 0 && p[j] === '}') {
+							// We want to insert \d{N} into the pattern string at runtime; in JS source this is '\\d{N}'.
+							out += '\\\\d{' + digits + '}';
+							i = j; // skip to closing brace
+							continue;
+						}
+					}
+					out += ch;
+				}
+				p = out;
+				// Re-check after conversion
+				const looksLikeRtcAfter = p.includes('\\d{4}-\\d{2}-\\d{2}') && p.includes('\\d{2}:\\d{2}:\\d{2}');
+				if (looksLikeRtcAfter) {
+					// Pattern is now properly escaped, treat as RTC
+				}
+			}
+
+			// Step 2: Escape brackets and dots for RTC patterns
+			// Be aggressive: if pattern starts with '[' and looks date-like, always escape brackets/dots
+			const needsBracketEscaping = (looksLikeRtc || looksLikeRtcLoose || looksLikeRtcWithBrackets) || 
+				(p.startsWith('[') && (p.includes('d{4}') || p.includes('\\d{4}') || p.includes('-') && p.includes(':')));
+			
+			if (needsBracketEscaping) {
+				// Escape all unescaped '[' and ']' characters
+				// NOTE: Inside template literal, we need to check for actual backslash character.
+				// At runtime, a single backslash in source is '\\', so we compare to '\\\\' (which becomes '\\' at runtime = single backslash).
+				let result = '';
+				for (let i = 0; i < p.length; i++) {
+					// Check if previous character is a backslash (at runtime, '\\' in source becomes '\' at runtime)
+					// In source: '\\\\' is two backslashes, which becomes one backslash at runtime
+					// So we compare p[i-1] (a single char) to '\\\\' (which is '\\' in source = one backslash at runtime)
+					const prevIsBackslash = i > 0 && p[i - 1] === '\\\\';
+					if (p[i] === '[' && !prevIsBackslash) {
+						result += '\\\\[';
+					} else if (p[i] === ']' && !prevIsBackslash) {
+						result += '\\\\]';
+					} else {
+						result += p[i];
+					}
+				}
+				p = result;
+				
+				// Also escape unescaped '.' characters (for the milliseconds part)
+				result = '';
+				for (let i = 0; i < p.length; i++) {
+					const prevIsBackslash = i > 0 && p[i - 1] === '\\\\';
+					if (p[i] === '.' && !prevIsBackslash) {
+						result += '\\\\.';
+					} else {
+						result += p[i];
+					}
+				}
+				p = result;
+			}
+
+			return p;
+		}
+
+		// Detect and parse the common ESP-IDF RTC datetime token:
+		//   "[YYYY-MM-DD HH:MM:SS.mmm]"
+		// Implemented without regex to avoid template-string escaping pitfalls.
+		function tryParseBracketedRtcDatetime(text) {
+			if (!text) return null;
+			const open = text.indexOf('[');
+			if (open < 0) return null;
+			const close = text.indexOf(']', open + 1);
+			if (close < 0) return null;
+
+			const inner = text.substring(open + 1, close).trim();
+			// Basic shape check to avoid treating arbitrary bracketed text as a datetime
+			if (!inner.includes('-') || !inner.includes(':') || !inner.includes('.')) return null;
+
+			const iso = inner.replace(' ', 'T');
+			const ms = Date.parse(iso);
+			if (Number.isNaN(ms)) return null;
+
+			return {
+				iso,          // "YYYY-MM-DDTHH:MM:SS.mmm"
+				inner,        // "YYYY-MM-DD HH:MM:SS.mmm"
+				matchStart: open,
+				matchEnd: close + 1
+			};
+		}
+
+		// Find where the time token ends so we can safely ignore it for variable extraction / matching.
+		// Returns the index immediately after the matched time token, or 0 if not found.
+		function getTimeTokenEndIndexForLine(plainText) {
+			if (!plainText || !timePatternInput || !timePatternInput.value) {
+				return 0;
+			}
+
+			try {
+				const timePattern = normalizeTimePatternInputValue(timePatternInput.value);
+				const axisMode = computeTimeAxisModeFromPattern(timePattern);
+
+				// RTC: deterministically use the bracketed datetime token.
+				if (axisMode === 'rtc') {
+					const seg = tryParseBracketedRtcDatetime(plainText);
+					return seg ? seg.matchEnd : 0;
+				}
+
+				// Uptime: use user regex only if it has a capture group (to avoid partial matches).
+				const rx = tryCreateTimeRegex();
+				if (!rx) return 0;
+				const m = rx.exec(plainText);
+				if (!m) return 0;
+				if (m[1] == null && m[2] == null) return 0;
+				return m.index + m[0].length;
+			} catch {
+				return 0;
+			}
+		}
+
+		function tryCreateTimeRegex() {
+			try {
+				const rawValue = timePatternInput ? timePatternInput.value : '';
+				const pattern = normalizeTimePatternInputValue(rawValue);
+				if (!pattern) return null;
+				return new RegExp(pattern);
+			} catch (e) {
+				// Invalid regex while user is editing; treat as "no time pattern"
+				console.error('FancyMon: tryCreateTimeRegex - error:', e, 'pattern was:', timePatternInput ? timePatternInput.value : '');
+				return null;
+			}
+		}
+
+		function setInputValuePreserveCaret(inputEl, newValue) {
+			if (!inputEl) return;
+			const oldValue = inputEl.value ?? '';
+			if (oldValue === newValue) return;
+
+			// Preserve caret/selection so normalization doesn't jump the cursor to the end.
+			const start = inputEl.selectionStart ?? oldValue.length;
+			const end = inputEl.selectionEnd ?? oldValue.length;
+
+			inputEl.value = newValue;
+
+			// Best-effort: keep the selection in the same place (clamped to new length).
+			const newLen = newValue.length;
+			const newStart = Math.min(start, newLen);
+			const newEnd = Math.min(end, newLen);
+			try {
+				inputEl.setSelectionRange(newStart, newEnd);
+			} catch {
+				// Ignore if not supported
+			}
+		}
+
+		function isPinnedTimePattern(pattern) {
+			const p = normalizeTimePatternInputValue(pattern);
+			return PINNED_TIME_PATTERNS.some(x => x.pattern === p);
+		}
+
+		function computeTimeAxisModeFromPattern(pattern) {
+			const p = normalizeTimePatternInputValue(pattern);
+			// Heuristic: date-like patterns typically contain YYYY-MM-DD and HH:MM:SS portions
+			// Avoid regex literals here as well; string checks are sufficient.
+			const hasDate = p.includes('\\d{4}-\\d{2}-\\d{2}') || p.includes('d{4}-d{2}-d{2}');
+			const hasTime = p.includes('\\d{2}:\\d{2}:\\d{2}') || p.includes('d{2}:d{2}:d{2}');
+			return (hasDate && hasTime) ? 'rtc' : 'uptime';
+		}
+
+		function updateTimePatternHintAndAxis() {
+			if (!timePatternInput) return;
+			const pattern = normalizeTimePatternInputValue(timePatternInput.value || '');
+			// Keep the field normalized so users don't end up with confusing double escapes.
+			if (timePatternInput.value !== pattern) {
+				setInputValuePreserveCaret(timePatternInput, pattern);
+			}
+			const mode = computeTimeAxisModeFromPattern(pattern);
+			const hoverTemplateRtc = '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>';
+			const hoverTemplateUptime = '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>';
+
+			// Update hint text
+			if (timePatternHint) {
+				const pinned = PINNED_TIME_PATTERNS.find(x => x.pattern === pattern);
+				timePatternHint.textContent = pinned?.hint || (mode === 'rtc' ? 'Extracts RTC datetime from brackets' : 'Extracts time from capture group 1');
+			}
+
+			// If mode changes, clear plot data to avoid mixing numeric uptime with date-time values
+			if (mode !== currentTimeAxisMode) {
+				currentTimeAxisMode = mode;
+				if (plotVariables.length > 0) {
+					plotVariables.forEach(v => v.data = []);
+					updateVariablesList();
+					if (plotInitialized && plotDiv) {
+						updateChart();
+					}
+				}
+			}
+
+			// Update chart axis type/title if plot already initialized
+			if (plotInitialized && plotDiv) {
+				const xTitle = mode === 'rtc' ? 'Time (RTC)' : 'Time (uptime)';
+				const xType = mode === 'rtc' ? 'date' : 'linear';
+				Plotly.relayout(plotDiv, {
+					'xaxis.title.text': xTitle,
+					'xaxis.type': xType,
+					'xaxis.tickformat': mode === 'rtc' ? '%H:%M:%S.%L' : null,
+					'xaxis.hoverformat': mode === 'rtc' ? '%Y-%m-%d %H:%M:%S.%L' : null
+				});
+
+				// Keep hover formatting consistent with axis mode
+				Plotly.restyle(plotDiv, {
+					hovertemplate: mode === 'rtc' ? hoverTemplateRtc : hoverTemplateUptime
+				});
+			}
+		}
+
 		// Tab switching
 		tabs.forEach(tab => {
 			tab.addEventListener('click', () => {
@@ -876,6 +1216,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 
+			const axisMode = computeTimeAxisModeFromPattern(timePatternInput ? timePatternInput.value : DEFAULT_UPTIME_TIME_PATTERN);
+			currentTimeAxisMode = axisMode;
+			const xAxisTitle = axisMode === 'rtc' ? 'Time (RTC)' : 'Time (uptime)';
+			const xAxisType = axisMode === 'rtc' ? 'date' : 'linear';
+			const xTickFormat = axisMode === 'rtc' ? '%H:%M:%S.%L' : undefined;
+			const xHoverFormat = axisMode === 'rtc' ? '%Y-%m-%d %H:%M:%S.%L' : undefined;
+			const hoverTemplate = axisMode === 'rtc'
+				? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
+				: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>';
+
 			// Prepare data traces from existing variables
 			const traces = plotVariables.map(variable => ({
 				x: variable.data.map(d => d.time),
@@ -889,7 +1239,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					color: variable.color,
 					width: 2
 				},
-				hovertemplate: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+				hovertemplate: hoverTemplate
 			}));
 
 			const layout = {
@@ -901,11 +1251,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 				},
 				xaxis: {
 					title: {
-						text: 'Time (uptime)',
+						text: xAxisTitle,
 						font: {
 							color: 'var(--vscode-foreground)'
 						}
 					},
+					type: xAxisType,
+					tickformat: xTickFormat,
+					hoverformat: xHoverFormat,
 					gridcolor: 'var(--vscode-panel-border)',
 					zerolinecolor: 'var(--vscode-panel-border)',
 					color: 'var(--vscode-foreground)'
@@ -1062,16 +1415,75 @@ export function getWebviewContentHtml(cspSource: string): string {
 		// Generate regex pattern that captures ALL numbers in the text
 		// This allows one regex to serve multiple variables
 		function generateCommonPattern(text) {
-			const numbers = extractNumbers(text);
+			const sourceText = stripAnsiCodes(text);
+			const numbers = extractNumbers(sourceText);
 			if (numbers.length === 0) return null;
 			
-			// Escape special regex characters (but preserve the number position)
+			// Escape special regex characters, but be tolerant of minor formatting differences between lines known to occur
+			// in logs (spaces after commas, '=' vs ':', varying whitespace).
 			function escapeRegexChars(str) {
 				let result = '';
+				let lastWasWhitespaceToken = false;
 				for (let i = 0; i < str.length; i++) {
 					const char = str[i];
-					if (char === '\\\\' || char === '.' || char === '*' || char === '+' || char === '?' || 
-						char === '^' || char === '$' || char === '{' || char === '}' || 
+
+					// Identifier run: keep it mostly literal, but allow small suffix variations (e.g. soc_ob vs soc_obs)
+					if ((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char === '_') {
+						let j = i + 1;
+						while (j < str.length) {
+							const c = str[j];
+							const isLetter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+							const isDigit = (c >= '0' && c <= '9');
+							if (isLetter || isDigit || c === '_') {
+								j++;
+							} else {
+								break;
+							}
+						}
+						const token = str.substring(i, j);
+						// Escape regex meta chars inside token (should be none, but safe)
+						let escaped = '';
+						for (let k = 0; k < token.length; k++) {
+							const t = token[k];
+							if (t === '\\\\' || t === '.' || t === '*' || t === '+' || t === '?' ||
+								t === '^' || t === '$' || t === '{' || t === '}' ||
+								t === '(' || t === ')' || t === '[' || t === ']' || t === '|') {
+								escaped += '\\\\' + t;
+							} else {
+								escaped += t;
+							}
+						}
+						result += escaped + '\\\\w*';
+						i = j - 1;
+						lastWasWhitespaceToken = false;
+						continue;
+					}
+
+					// Collapse any whitespace runs to \s*
+					if (char === ' ' || char === '\\t' || char === '\\r' || char === '\\n') {
+						if (!lastWasWhitespaceToken) {
+							result += '\\\\s*';
+							lastWasWhitespaceToken = true;
+						}
+						continue;
+					}
+					lastWasWhitespaceToken = false;
+
+					// Common separator differences in logs: "key=val" vs "key:val"
+					if (char === '=' || char === ':') {
+						result += '\\\\s*[=:]\\\\s*';
+						continue;
+					}
+
+					// After commas, logs sometimes have 0/1+ spaces
+					if (char === ',') {
+						result += ',\\\\s*';
+						continue;
+					}
+
+					// Default: escape regex meta chars, otherwise emit literal
+					if (char === '\\\\' || char === '.' || char === '*' || char === '+' || char === '?' ||
+						char === '^' || char === '$' || char === '{' || char === '}' ||
 						char === '(' || char === ')' || char === '[' || char === ']' || char === '|') {
 						result += '\\\\' + char;
 					} else {
@@ -1090,20 +1502,48 @@ export function getWebviewContentHtml(cspSource: string): string {
 			for (const num of sortedNumbers) {
 				// Add text before this number
 				if (num.position > pos) {
-					const textBefore = text.substring(pos, num.position);
+					const textBefore = sourceText.substring(pos, num.position);
 					pattern += escapeRegexChars(textBefore);
 				}
 				
 				// Add capture group for this number
 				// Always capture every number
 				pattern += '(-?\\\\d+\\\\.?\\\\d*)';
-				
-				pos = num.position + num.text.length;
+
+				// Many logs append units to numbers (e.g. "3.57V", "175mA", "236.0ms", "2.0mV", "0.00s", "17.1%").
+				// If we treat those unit letters as literal text, the generated pattern becomes too strict and won't match
+				// future lines when units appear/disappear or change. So:
+				// - Allow an optional unit suffix after every number
+				// - Also skip the unit suffix (and optional whitespace before it) in the source-text cursor,
+				//   so we don't bake it into the literal text segments between numbers.
+				pattern += '(?:\\\\s*[A-Za-z%]+)?';
+
+				let nextPos = num.position + num.text.length;
+				let j = nextPos;
+				// Optional whitespace before unit
+				while (j < sourceText.length && (sourceText[j] === ' ' || sourceText[j] === '\\t')) {
+					j++;
+				}
+				const unitStart = j;
+				while (j < sourceText.length) {
+					const ch = sourceText[j];
+					const isLetter = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+					if (isLetter || ch === '%') {
+						j++;
+					} else {
+						break;
+					}
+				}
+				if (j > unitStart) {
+					nextPos = j;
+				}
+
+				pos = nextPos;
 			}
 			
 			// Add remaining text after last number
-			if (pos < text.length) {
-				const textAfter = text.substring(pos);
+			if (pos < sourceText.length) {
+				const textAfter = sourceText.substring(pos);
 				pattern += escapeRegexChars(textAfter);
 			}
 			
@@ -1117,7 +1557,55 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return result.pattern;
 		}
 
-		// Extract variable name from pattern (just the number text itself)
+		// Suggest a variable name by looking immediately before the number.
+		// We allow separators between name and value: ':', '=' or whitespace.
+		// Examples:
+		//   "TEMP: 12.3"  -> "TEMP"
+		//   "foo=123"     -> "foo"
+		//   "bar 99"      -> "bar"
+		//   "baz99"       -> "baz"
+		function suggestVariableNameFromContext(text, numberPosition) {
+			if (typeof numberPosition !== 'number' || numberPosition <= 0) {
+				return null;
+			}
+
+			const plainText = stripAnsiCodes(text || '');
+			let i = Math.min(numberPosition - 1, plainText.length - 1);
+			if (i < 0) {
+				return null;
+			}
+
+			// Skip whitespace directly before number
+			while (i >= 0 && /\s/.test(plainText[i])) {
+				i--;
+			}
+
+			// Optional ':' or '=' separator, then optional whitespace
+			if (i >= 0 && (plainText[i] === ':' || plainText[i] === '=')) {
+				i--;
+				while (i >= 0 && /\s/.test(plainText[i])) {
+					i--;
+				}
+			}
+
+			// Scan backwards for identifier characters
+			const end = i;
+			while (i >= 0 && /[A-Za-z0-9_]/.test(plainText[i])) {
+				i--;
+			}
+
+			const start = i + 1;
+			if (start <= end) {
+				const token = plainText.substring(start, end + 1);
+				if (/^[A-Za-z_]/.test(token)) {
+					return token;
+				}
+			}
+
+			return null;
+		}
+
+		// Extract variable name (prefer custom name; otherwise prefer suggested context name; fallback to number text)
 		function extractVariableName(text, numberIndex) {
 			const numbers = extractNumbers(text);
 			if (numberIndex < 1 || numberIndex > numbers.length) {
@@ -1154,7 +1642,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 
 			const targetNumber = numbers[numberIndex - 1];
-			return targetNumber.text;
+			const suggested = suggestVariableNameFromContext(text, targetNumber.position);
+			return suggested || targetNumber.text;
 		}
 
 		// Update extraction preview
@@ -1169,41 +1658,40 @@ export function getWebviewContentHtml(cspSource: string): string {
 			let timeMatchEnd = 0; // Position after time match
 			if (timePatternInput && timePatternInput.value) {
 				try {
-					const timePattern = timePatternInput.value.trim();
-					if (timePattern) {
-						console.log('FancyMon: Time pattern:', timePattern);
-						const regex = new RegExp(timePattern);
-						const match = regex.exec(plainText);
-						console.log('FancyMon: Time match:', match, 'on text:', plainText);
-						if (match) {
-							// Use the first capture group if available, otherwise use the full match
-							// For pattern like \(([0-9]+)\), match[1] is the digits
-							// For pattern like (([0-9]+)), match[1] is the outer group, match[2] is the digits
-							let capturedValue = null;
-							if (match[2]) {
-								// Pattern has nested groups, use the inner one (the digits)
-								capturedValue = match[2];
-							} else if (match[1]) {
-								// Pattern has one capture group
-								capturedValue = match[1];
-							} else {
-								// No capture group, use full match
-								capturedValue = match[0];
-							}
-							
-							timeValue = parseFloat(capturedValue);
-							// Get the end position of the entire match (not just capture group)
-							timeMatchEnd = match.index + match[0].length;
-							console.log('FancyMon: Time match at index', match.index, 'length', match[0].length, 'end position:', timeMatchEnd);
-							console.log('FancyMon: Full match:', match[0], 'Capture groups:', Array.from(match).slice(1));
-							console.log('FancyMon: Using value:', capturedValue, 'parsed as:', timeValue);
-							console.log('FancyMon: Text before time:', plainText.substring(0, timeMatchEnd));
-							console.log('FancyMon: Text after time:', plainText.substring(timeMatchEnd));
-						} else {
-							console.log('FancyMon: Time pattern did not match! Pattern:', timePattern, 'Text:', plainText);
-							console.log('FancyMon: Hint - if matching parentheses, use \\( and \\) to escape them');
+					const timePattern = normalizeTimePatternInputValue(timePatternInput.value);
+					if (timePatternInput.value !== timePattern) {
+						setInputValuePreserveCaret(timePatternInput, timePattern);
+					}
+					const axisMode = computeTimeAxisModeFromPattern(timePattern);
+
+					// If we're in RTC mode, deterministically strip the bracketed datetime token so it never shows up as a variable.
+					// This is robust even if the user's regex is malformed (e.g. missing escapes).
+					if (axisMode === 'rtc') {
+						const seg = tryParseBracketedRtcDatetime(plainText);
+						if (seg) {
+							timeValue = seg.inner;
+							timeMatchEnd = seg.matchEnd;
 						}
 					}
+
+					// 1) Try the user-provided time regex, but ONLY accept it if it actually contains a capture group.
+					// Accepting match[0] is dangerous: if the user accidentally types an unescaped '[',
+					// the regex can degrade into a character class and "match" a single character inside the datetime,
+					// which would make us treat most of the datetime as plot variables.
+					const regex = tryCreateTimeRegex();
+					if (regex) {
+						const match = regex.exec(plainText);
+						if (match) {
+							const capturedValue = match[2] ?? match[1] ?? null;
+							if (capturedValue !== null) {
+								timeValue = String(capturedValue);
+								timeMatchEnd = match.index + match[0].length;
+							}
+						}
+					}
+
+					// Note: In RTC mode, tryParseBracketedRtcDatetime already provides the “correct” filtering boundary.
+					// In uptime mode: if the user's pattern is invalid / doesn't capture, we just won't filter.
 				} catch (e) {
 					console.error('FancyMon: Error matching time pattern:', e);
 				}
@@ -1218,17 +1706,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Verify positions are correct by checking against plainText
 			// If extractNumbers used a different plainText (due to different ANSI stripping),
 			// positions might be off. But since both use the same stripAnsiCodes function, they should match.
-			console.log('FancyMon: updateExtractionPreview - plainText length:', plainText.length);
-			console.log('FancyMon: updateExtractionPreview - allNumbers:', allNumbers);
 			
 			// Filter out numbers that come before the time pattern match
 			if (timeMatchEnd > 0) {
-				console.log('FancyMon: Filtering numbers before position', timeMatchEnd);
-				extractedNumbers = allNumbers.filter(num => {
-					const include = num.position >= timeMatchEnd;
-					console.log('FancyMon: Number at position', num.position, ':', num.text, 'text around it:', plainText.substring(Math.max(0, num.position - 5), num.position + num.text.length + 5), include ? 'INCLUDED' : 'EXCLUDED');
-					return include;
-				});
+				extractedNumbers = allNumbers.filter(num => num.position >= timeMatchEnd);
 				// Re-index starting from 1, but keep original index for pattern generation
 				extractedNumbers = extractedNumbers.map((num, idx) => ({
 					...num,
@@ -1238,8 +1719,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 			} else {
 				extractedNumbers = allNumbers;
 			}
-			
-			console.log('FancyMon: Final extractedNumbers:', extractedNumbers);
 			
 			if (extractedNumbers.length === 0) {
 				if (timeValue !== null) {
@@ -1278,7 +1757,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// Custom Name Input
 					const nameInput = document.createElement('input');
 					nameInput.type = 'text';
-					nameInput.placeholder = num.text; // Use extracted number as placeholder
+					// Prefer auto-suggested identifier name (TEMP/voltage/etc); include value in parentheses as a hint
+					const suggestedName = suggestVariableNameFromContext(text, num.position);
+					nameInput.placeholder = suggestedName ? (suggestedName + ' (' + num.text + ')') : num.text;
 					nameInput.style.width = '120px';
 					nameInput.style.marginRight = '5px';
 					nameInput.style.fontSize = '11px';
@@ -1378,39 +1859,80 @@ export function getWebviewContentHtml(cspSource: string): string {
 		function addVariableToPlot() {
 			if (!patternInput || selectedNumbers.size === 0) return;
 
-			const text = patternInput.value.trim();
-			if (!text) return;
+			const rawText = patternInput.value;
+			if (!rawText || rawText.trim().length === 0) return;
+
+			const plainText = stripAnsiCodes(rawText);
+
+			// IMPORTANT: The generated regex must match future lines.
+			// So we generate the pattern from the portion AFTER the time token, and we will also
+			// apply the regex to that same substring at runtime.
+			const timeEnd = getTimeTokenEndIndexForLine(plainText);
+			const matchFromTimeToken = timeEnd > 0;
+			const patternSourceText = matchFromTimeToken ? plainText.substring(timeEnd) : plainText;
 
 			// Generate a common pattern that captures ALL numbers
-			const patternResult = generateCommonPattern(text);
+			const patternResult = generateCommonPattern(patternSourceText);
 			if (!patternResult) return;
 			
 			const { pattern, sortedNumbers } = patternResult;
 			const regex = new RegExp(pattern);
 
 			selectedNumbers.forEach((axis, numIndex) => {
-				// Find the original index if numbers were filtered
-				const numObj = extractedNumbers.find(n => n.index === numIndex);
-				const originalIndex = numObj && numObj.originalIndex ? numObj.originalIndex : numIndex;
-				
-				// Find which capture group this corresponds to
-				// The capture group index is the (index in sortedNumbers) + 1
-				// sortedNumbers contains all numbers found in the text, sorted by position
-				// extractedNumbers might be a filtered subset, but originalIndex should match the index in extractNumbers(text)
-				// Wait, extractNumbers returns list in order found. sortedNumbers is sorted by position.
-				// For the pattern we built, the k-th number in sortedNumbers corresponds to capture group k+1.
-				
-				// We need to match the 'originalIndex' (which comes from extractNumbers) to the sorted position
-				// extractNumbers usually returns them in order, so sortedNumbers should be same order unless regex order differs from position order
-				// But let's be safe: find the number in sortedNumbers that has the same position/text/index
-				
-				const targetNumInSorted = sortedNumbers.find(n => n.index === originalIndex);
+				// numIndex is the index in the *filtered* list shown in the UI (1..N).
+				// Since we generate the pattern from the portion after the time token, the extracted numbers
+				// in that substring are also indexed 1..N in the same order. So we map directly by n.index.
+				const targetNumInSorted = sortedNumbers.find(n => n.index === numIndex);
 				if (!targetNumInSorted) return;
 				
 				const captureIndex = sortedNumbers.indexOf(targetNumInSorted) + 1;
 
-				const name = extractVariableName(text, originalIndex);
+				// Resolve display name:
+				// - prefer user-entered custom name (data-index == numIndex)
+				// - else use suggested identifier from original full line
+				// - else fallback to number text itself
+				let name = null;
+				if (numberSelector) {
+					const selector = 'input[type="text"][data-index="' + numIndex + '"]';
+					const nameInput = numberSelector.querySelector(selector);
+					if (nameInput && nameInput.value.trim().length > 0) {
+						name = nameInput.value.trim();
+					}
+				}
+				if (!name) {
+					const numObj = extractedNumbers.find(n => n.index === numIndex);
+					if (numObj) {
+						const suggested = suggestVariableNameFromContext(rawText, numObj.position);
+						name = suggested || numObj.text;
+					} else {
+						name = 'variable' + numIndex;
+					}
+				}
 				const color = getNextColor(plotVariables.length);
+
+				// If we can identify a key name (e.g. "V_term", "soc_obs"), prefer key-based matching.
+				// This is dramatically more robust than a fully-literal line pattern, because log formatting
+				// often changes slightly between lines (":" vs "=", added units like "ms/mV/%/s", spacing, etc).
+				let keyName = null;
+				const numObjForKey = extractedNumbers.find(n => n.index === numIndex);
+				if (numObjForKey) {
+					// Use patternSourceText (after time token) for key detection, since that's what we'll match against at runtime.
+					// Adjust position: if matchFromTimeToken, subtract timeEnd; otherwise use position as-is.
+					const keyPosition = matchFromTimeToken 
+						? numObjForKey.position - timeEnd 
+						: numObjForKey.position;
+					if (keyPosition >= 0) {
+						keyName = suggestVariableNameFromContext(patternSourceText, keyPosition);
+					}
+				}
+
+				const keyRegex = keyName
+					// keyName comes from suggestVariableNameFromContext and is limited to [A-Za-z_][A-Za-z0-9_]*,
+					// so it is already safe to embed directly into a RegExp pattern without extra escaping.
+					// Allow optional units (V, mA, %, ms, mV, s, etc.) after the number.
+					? new RegExp('(?:^|[^A-Za-z0-9_])' + keyName + '\\\\s*[=:]\\\\s*(-?\\\\d+\\\\.?\\\\d*)(?:\\\\s*[A-Za-z%]+)?')
+					: null;
+				
 				
 				const variable = {
 					id: Date.now() + '-' + numIndex,
@@ -1420,9 +1942,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// Actually, for caching in processLineForPlot, we key by pattern string.
 					// So it doesn't matter if regex object is different, as long as pattern string is same.
 					captureIndex: captureIndex,
+					keyName: keyName,
+					keyRegex: keyRegex,
 					data: [],
 					color: color,
-					axis: axis
+					axis: axis,
+					matchFromTimeToken: matchFromTimeToken
 				};
 
 				plotVariables.push(variable);
@@ -1444,7 +1969,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 							color: color,
 							width: 2
 						},
-						hovertemplate: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+						hovertemplate: currentTimeAxisMode === 'rtc'
+							? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
+							: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
 					};
 					Plotly.addTraces(plotDiv, newTrace);
 				}
@@ -1536,13 +2063,38 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 
 			try {
-				const timePattern = timePatternInput.value.trim();
-				if (!timePattern) return null;
+				const rawPattern = timePatternInput.value;
+				const timePattern = normalizeTimePatternInputValue(rawPattern);
+				if (!timePattern) {
+					return null;
+				}
 
-				const regex = new RegExp(timePattern);
+				const regex = tryCreateTimeRegex();
+				if (!regex) {
+					return null;
+				}
 				const match = regex.exec(line);
 				if (match && match[1]) {
-					return parseFloat(match[1]);
+					const raw = String(match[1]);
+					// RTC datetime like "2025-12-13 04:56:14.632"
+					// IMPORTANT: Do not use a regex literal containing "\d" inside this HTML template string;
+					// it gets de-escaped at build time and breaks the detection (leading to year-only plots via parseFloat()).
+					const trimmed = raw.trim();
+					const isoCandidate = trimmed.replace(' ', 'T');
+					const parsedMs = Date.parse(isoCandidate);
+					if (!Number.isNaN(parsedMs) && trimmed.includes('-') && trimmed.includes(':')) {
+						return isoCandidate;
+					}
+
+					// Numeric uptime
+					const num = parseFloat(raw);
+					return isNaN(num) ? null : num;
+				}
+
+				// Fallback for RTC datetime
+				const rtcFallback = new RegExp(RTC_DATETIME_TIME_PATTERN).exec(line);
+				if (rtcFallback && rtcFallback[1]) {
+					return rtcFallback[1].replace(' ', 'T');
 				}
 			} catch (e) {
 				console.error('Error extracting time:', e);
@@ -1556,29 +2108,54 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 			const plainText = stripAnsiCodes(line);
 			const timeValue = extractTimeValue(plainText);
-			if (timeValue === null) return;
+			if (timeValue === null) {
+				return;
+			}
 
 			let chartNeedsUpdate = false;
 			
 			// Cache regex matches for variables sharing the same pattern
 			// Map pattern string -> Match result (or null if no match)
 			const matchCache = new Map();
+			const matchCacheAfterTime = new Map();
+
+			// Precompute the substring after the time token for variables that need it
+			const timeEnd = getTimeTokenEndIndexForLine(plainText);
+			const afterTimeText = timeEnd > 0 ? plainText.substring(timeEnd) : '';
 			
 			plotVariables.forEach((variable, index) => {
 				try {
 					let match;
+					const matchText = variable.matchFromTimeToken ? afterTimeText : plainText;
+					const cache = variable.matchFromTimeToken ? matchCacheAfterTime : matchCache;
 					
+					// Prefer key-based extraction when available.
+					if (variable.keyRegex) {
+						match = variable.keyRegex.exec(matchText);
+						if (match && match[1]) {
+							const value = parseFloat(match[1]);
+							if (!isNaN(value)) {
+								variable.data.push({ time: timeValue, value: value });
+								if (variable.data.length > MAX_PLOT_POINTS) {
+									variable.data = variable.data.slice(-MAX_PLOT_POINTS);
+								}
+								chartNeedsUpdate = true;
+							}
+						}
+						return;
+					}
+
 					// Optimization: Check cache first
-					if (matchCache.has(variable.pattern)) {
-						match = matchCache.get(variable.pattern);
+					if (cache.has(variable.pattern)) {
+						match = cache.get(variable.pattern);
 					} else {
 						// Execute regex and cache result
 						// If variable.regex is missing (legacy), create it
 						if (!variable.regex) {
 							variable.regex = new RegExp(variable.pattern);
 						}
-						match = variable.regex.exec(plainText);
-						matchCache.set(variable.pattern, match);
+						match = variable.regex.exec(matchText);
+						cache.set(variable.pattern, match);
 					}
 					
 					// Use specific capture group index if available (new logic), otherwise default to 1 (legacy)
@@ -1620,8 +2197,55 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		if (timePatternInput) {
-			timePatternInput.addEventListener('input', updateExtractionPreview);
-			timePatternInput.addEventListener('change', updateExtractionPreview);
+			timePatternInput.addEventListener('input', () => {
+				updateExtractionPreview();
+				updateTimePatternHintAndAxis();
+				// Persist current value
+				vscode.postMessage({ command: 'updateTimePatternValue', value: timePatternInput.value });
+				// Debounced add-to-history (avoid storing partial patterns)
+				if (timePatternDebounceTimer) {
+					clearTimeout(timePatternDebounceTimer);
+				}
+				timePatternDebounceTimer = setTimeout(() => {
+					const v = (timePatternInput.value || '').trim();
+					if (v) {
+						addToTimePatternHistory(v);
+					}
+					timePatternDebounceTimer = null;
+				}, TIME_PATTERN_HISTORY_DEBOUNCE_MS);
+			});
+			timePatternInput.addEventListener('change', () => {
+				updateExtractionPreview();
+				updateTimePatternHintAndAxis();
+				vscode.postMessage({ command: 'updateTimePatternValue', value: timePatternInput.value });
+				const v = (timePatternInput.value || '').trim();
+				if (v) {
+					addToTimePatternHistory(v);
+				}
+			});
+
+			timePatternInput.addEventListener('keydown', (e) => {
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					navigateTimePatternHistory('up');
+				} else if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					navigateTimePatternHistory('down');
+				} else if (e.key === 'Escape') {
+					if (timePatternHistoryDropdown && timePatternHistoryDropdown.style.display === 'block') {
+						timePatternHistoryDropdown.style.display = 'none';
+						selectedTimePatternHistoryIndex = -1;
+					}
+				} else if (e.key === 'Enter' && selectedTimePatternHistoryIndex >= 0 && timePatternHistoryDropdown && timePatternHistoryDropdown.style.display === 'block') {
+					e.preventDefault();
+					selectTimePatternHistoryItem(selectedTimePatternHistoryIndex);
+				}
+			});
+		}
+
+		// Initialize hint/axis mode once on load (before any persisted value arrives)
+		if (timePatternInput) {
+			updateTimePatternHintAndAxis();
 		}
 
 		if (addVariableBtn) {
@@ -2899,6 +3523,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 		}
 
+		if (timePatternHistoryBtn) {
+			timePatternHistoryBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				toggleTimePatternHistoryDropdown();
+			});
+		}
+
 		saveBtn.addEventListener('click', () => {
 			// Get raw text content (remove ANSI codes for saving)
 			// Use character code escape sequence in regex pattern string
@@ -3183,7 +3814,143 @@ export function getWebviewContentHtml(cspSource: string): string {
 			    !excludeFilterInput.contains(e.target)) {
 				excludeHistoryDropdown.style.display = 'none';
 			}
+			if (timePatternHistoryDropdown && timePatternHistoryBtn && timePatternInput &&
+			    !timePatternHistoryDropdown.contains(e.target) &&
+			    !timePatternHistoryBtn.contains(e.target) &&
+			    !timePatternInput.contains(e.target)) {
+				timePatternHistoryDropdown.style.display = 'none';
+			}
 		});
+
+		// Time pattern history management functions (mirrors filter history UX)
+		function addToTimePatternHistory(pattern) {
+			if (!pattern || pattern.trim() === '') {
+				return;
+			}
+			const trimmed = pattern.trim();
+			// Don't store pinned defaults; they are always shown in pinned section
+			if (isPinnedTimePattern(trimmed)) {
+				return;
+			}
+
+			const idx = timePatternHistory.indexOf(trimmed);
+			if (idx > -1) {
+				timePatternHistory.splice(idx, 1);
+			}
+			timePatternHistory.unshift(trimmed);
+			if (timePatternHistory.length > MAX_TIME_PATTERN_HISTORY) {
+				timePatternHistory = timePatternHistory.slice(0, MAX_TIME_PATTERN_HISTORY);
+			}
+			vscode.postMessage({ command: 'updateTimePatternHistory', history: timePatternHistory });
+		}
+
+		function renderTimePatternHistoryDropdown() {
+			if (!timePatternHistoryDropdown) return;
+
+			timePatternHistoryDropdown.innerHTML = '';
+			selectedTimePatternHistoryIndex = -1;
+			timePatternDropdownItems = [];
+
+			// Recent (user) patterns
+			if (timePatternHistory.length === 0) {
+				const emptyItem = document.createElement('div');
+				emptyItem.className = 'history-item empty';
+				emptyItem.textContent = 'No recent time patterns';
+				timePatternHistoryDropdown.appendChild(emptyItem);
+			} else {
+				timePatternHistory.forEach((p) => {
+					const item = document.createElement('div');
+					item.className = 'history-item selectable';
+					item.textContent = p;
+					item.title = p;
+					const index = timePatternDropdownItems.length;
+					timePatternDropdownItems.push({ pattern: p });
+					item.addEventListener('click', () => selectTimePatternHistoryItem(index));
+					item.addEventListener('mouseenter', () => {
+						selectedTimePatternHistoryIndex = index;
+						updateTimePatternHistorySelection();
+					});
+					timePatternHistoryDropdown.appendChild(item);
+				});
+			}
+
+			// Separator + pinned patterns (always present)
+			const sep = document.createElement('div');
+			sep.className = 'history-separator';
+			sep.textContent = 'Pinned';
+			timePatternHistoryDropdown.appendChild(sep);
+
+			PINNED_TIME_PATTERNS.forEach((pinned) => {
+				const item = document.createElement('div');
+				item.className = 'history-item pinned selectable';
+				item.textContent = pinned.label;
+				item.title = pinned.pattern + '\\n' + pinned.hint;
+				const index = timePatternDropdownItems.length;
+				timePatternDropdownItems.push({ pattern: pinned.pattern });
+				item.addEventListener('click', () => selectTimePatternHistoryItem(index));
+				item.addEventListener('mouseenter', () => {
+					selectedTimePatternHistoryIndex = index;
+					updateTimePatternHistorySelection();
+				});
+				timePatternHistoryDropdown.appendChild(item);
+			});
+		}
+
+		function updateTimePatternHistorySelection() {
+			if (!timePatternHistoryDropdown) return;
+			const items = timePatternHistoryDropdown.querySelectorAll('.history-item.selectable');
+			items.forEach((item, idx) => {
+				if (idx === selectedTimePatternHistoryIndex) {
+					item.classList.add('selected');
+					item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				} else {
+					item.classList.remove('selected');
+				}
+			});
+		}
+
+		function selectTimePatternHistoryItem(index) {
+			if (!timePatternInput || !timePatternHistoryDropdown) return;
+			if (index < 0 || index >= timePatternDropdownItems.length) return;
+			const chosen = timePatternDropdownItems[index]?.pattern;
+			if (!chosen) return;
+
+			timePatternInput.value = normalizeTimePatternInputValue(chosen);
+			timePatternHistoryDropdown.style.display = 'none';
+			selectedTimePatternHistoryIndex = -1;
+
+			// Persist + update
+			vscode.postMessage({ command: 'updateTimePatternValue', value: timePatternInput.value });
+			addToTimePatternHistory(timePatternInput.value);
+			updateTimePatternHintAndAxis();
+			updateExtractionPreview();
+			timePatternInput.focus();
+		}
+
+		function navigateTimePatternHistory(direction) {
+			if (!timePatternHistoryDropdown || timePatternHistoryDropdown.style.display === 'none' || !timePatternHistoryDropdown.style.display) {
+				renderTimePatternHistoryDropdown();
+				timePatternHistoryDropdown.style.display = 'block';
+				selectedTimePatternHistoryIndex = 0;
+			} else {
+				if (direction === 'up') {
+					selectedTimePatternHistoryIndex = Math.max(0, selectedTimePatternHistoryIndex - 1);
+				} else if (direction === 'down') {
+					selectedTimePatternHistoryIndex = Math.min(timePatternDropdownItems.length - 1, selectedTimePatternHistoryIndex + 1);
+				}
+			}
+			updateTimePatternHistorySelection();
+		}
+
+		function toggleTimePatternHistoryDropdown() {
+			if (!timePatternHistoryDropdown || !timePatternHistoryBtn) return;
+			if (timePatternHistoryDropdown.style.display === 'none' || !timePatternHistoryDropdown.style.display) {
+				renderTimePatternHistoryDropdown();
+				timePatternHistoryDropdown.style.display = 'block';
+			} else {
+				timePatternHistoryDropdown.style.display = 'none';
+			}
+		}
 		
 		// Filter history management functions
 		function addToIncludeFilterHistory(filter) {
@@ -3630,6 +4397,20 @@ export function getWebviewContentHtml(cspSource: string): string {
 						excludeFilterHistory = [...message.history];
 						console.log('FancyMon: Loaded exclude filter history:', excludeFilterHistory.length, 'items:', excludeFilterHistory);
 					}
+					break;
+
+				case 'timePatternHistoryLoaded':
+					if (message.history && Array.isArray(message.history)) {
+						timePatternHistory = [...message.history];
+					}
+					break;
+
+				case 'timePatternValueLoaded':
+					if (timePatternInput && typeof message.value === 'string' && message.value.trim() !== '') {
+						timePatternInput.value = normalizeTimePatternInputValue(message.value);
+					}
+					updateTimePatternHintAndAxis();
+					updateExtractionPreview();
 					break;
 				case 'connected':
 					console.log('FancyMon: Received connected message!');

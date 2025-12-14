@@ -2,7 +2,7 @@
   "name": "fancymon",
   "displayName": "FancyMon - Serial Monitor",
   "description": "A fancy serial monitor with advanced features including filtering, plotting, and real-time data visualization",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "wombat",
   "icon": "fancymon_no_text.png",
   "repository": {

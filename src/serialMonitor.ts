@@ -27,6 +27,8 @@ export class SerialMonitor {
 	private readonly messageHistoryKey = 'fancymon.messageHistory';
 	private readonly includeFilterHistoryKey = 'fancymon.includeFilterHistory';
 	private readonly excludeFilterHistoryKey = 'fancymon.excludeFilterHistory';
+	private readonly timePatternHistoryKey = 'fancymon.timePatternHistory';
+	private readonly timePatternValueKey = 'fancymon.timePatternValue';
 	private readonly elfFileKey = 'fancymon.elfFile';
 	public connection: SerialConnection; // Made public for external access
 
@@ -197,6 +199,20 @@ export class SerialMonitor {
 						}
 						break;
 
+					case 'updateTimePatternHistory':
+						// Save time pattern history
+						if (message.history && Array.isArray(message.history)) {
+							this.context.workspaceState.update(this.timePatternHistoryKey, [...message.history]);
+						}
+						break;
+
+					case 'updateTimePatternValue':
+						// Save current time pattern value
+						if (typeof message.value === 'string') {
+							this.context.workspaceState.update(this.timePatternValueKey, message.value);
+						}
+						break;
+
 					case 'selectElfFile':
 						const uris = await vscode.window.showOpenDialog({
 							canSelectFiles: true,
@@ -346,6 +362,10 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			console.log('FancyMon: Loading include filter history:', includeFilterHistory.length, 'items:', includeFilterHistory);
 			console.log('FancyMon: Loading exclude filter history:', excludeFilterHistory.length, 'items:', excludeFilterHistory);
 			
+			// Get time pattern state
+			const timePatternHistory = this.context.workspaceState.get<string[]>(this.timePatternHistoryKey) || [];
+			const timePatternValue = this.context.workspaceState.get<string>(this.timePatternValueKey);
+			
 			this.sendMessage({
 				command: 'portsListed',
 				ports: ports,
@@ -368,6 +388,17 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			this.sendMessage({
 				command: 'excludeFilterHistoryLoaded',
 				history: [...excludeFilterHistory] // Create a copy
+			});
+
+			// Send time pattern state
+			this.sendMessage({
+				command: 'timePatternHistoryLoaded',
+				history: [...timePatternHistory]
+			});
+
+			this.sendMessage({
+				command: 'timePatternValueLoaded',
+				value: timePatternValue ?? ''
 			});
 
 			// Restore ELF file
