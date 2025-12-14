@@ -560,6 +560,75 @@ export function getWebviewContentHtml(cspSource: string): string {
 			width: 100%;
 			height: 100%;
 		}
+
+		.custom-legend {
+			position: absolute;
+			top: 10px;
+			display: flex;
+			flex-direction: row;
+			gap: 15px;
+			background-color: rgba(255, 255, 255, 0.9);
+			padding: 5px 10px;
+			border-radius: 3px;
+			border: 1px solid var(--vscode-panel-border);
+			font-size: 12px;
+			z-index: 10;
+			pointer-events: auto;
+		}
+
+		.y1-legend {
+			left: 10px;
+		}
+
+		.y2-legend {
+			right: 280px;
+			display: grid !important;
+			grid-template-columns: repeat(2, auto);
+			grid-auto-flow: row;
+			gap: 5px 15px;
+			align-items: start;
+			flex-direction: unset;
+		}
+
+		.y2-legend .custom-legend-item {
+			display: flex;
+			align-items: center;
+			gap: 5px;
+			cursor: pointer;
+			padding: 2px 5px;
+			border-radius: 2px;
+			width: max-content;
+		}
+
+		.custom-legend-item {
+			display: flex;
+			align-items: center;
+			gap: 5px;
+			cursor: pointer;
+			padding: 2px 5px;
+			border-radius: 2px;
+		}
+
+		.custom-legend-item:hover {
+			background-color: var(--vscode-list-hoverBackground);
+		}
+
+		.custom-legend-item.hidden {
+			opacity: 0.4;
+			text-decoration: line-through;
+		}
+
+		.custom-legend-color {
+			width: 12px;
+			height: 12px;
+			border-radius: 2px;
+			display: inline-block;
+		}
+
+		.custom-legend-item span:not(.custom-legend-color) {
+			color: #000000;
+			font-weight: 500;
+		}
 	</style>
 </head>
 <body>
@@ -712,6 +781,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 		</div>
 		<div class="plot-container">
 			<div id="plotDiv"></div>
+			<div id="y1Legend" class="custom-legend y1-legend"></div>
+			<div id="y2Legend" class="custom-legend y2-legend"></div>
 		</div>
 	</div>
 
@@ -826,7 +897,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 		// Pinned time patterns (always visible at bottom of dropdown)
 		// IMPORTANT: These strings are what the user should type into the input (single backslashes),
 		// i.e. \d means "digit" in RegExp, and \[ means "literal ["
-		const DEFAULT_UPTIME_TIME_PATTERN = '\\(([0-9]+)\\)';
+		// NOTE: Inside template string, '\\' in source becomes '\' at runtime
+		// So '\\d' in source = '\d' at runtime (correct - single backslash before d)
+		// The pattern constant is defined with '\\' to get '\' at runtime
+		const DEFAULT_UPTIME_TIME_PATTERN = '\\\\(([0-9]+)\\\\)';
 		const RTC_DATETIME_TIME_PATTERN = '\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\]';
 		const PINNED_TIME_PATTERNS = [
 			{
@@ -1124,6 +1198,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		function computeTimeAxisModeFromPattern(pattern) {
 			const p = normalizeTimePatternInputValue(pattern);
+			// First check if it matches the pinned RTC pattern
+			const normalizedRtcPattern = normalizeTimePatternInputValue(RTC_DATETIME_TIME_PATTERN);
+			if (p === normalizedRtcPattern) {
+				return 'rtc';
+			}
+			
 			// Heuristic: date-like patterns typically contain YYYY-MM-DD and HH:MM:SS portions
 			// Avoid regex literals here as well; string checks are sufficient.
 			const hasDate = p.includes('\\d{4}-\\d{2}-\\d{2}') || p.includes('d{4}-d{2}-d{2}');
@@ -1162,7 +1242,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 			// Update chart axis type/title if plot already initialized
 			if (plotInitialized && plotDiv) {
-				const xTitle = mode === 'rtc' ? 'Time (RTC)' : 'Time (uptime)';
+				const xTitle = mode === 'rtc' ? 'RTC DateTime' : 'CPU Uptime (ms)';
 				const xType = mode === 'rtc' ? 'date' : 'linear';
 				Plotly.relayout(plotDiv, {
 					'xaxis.title.text': xTitle,
@@ -1200,9 +1280,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 							initializeChart();
 						}, 100);
 					} else if (plotInitialized) {
-						// Resize chart when switching to plot tab
+						// Resize chart and ensure axis title is correct when switching to plot tab
 						setTimeout(() => {
 							Plotly.Plots.resize(plotDiv);
+							// Ensure axis title matches current mode by calling updateTimePatternHintAndAxis
+							updateTimePatternHintAndAxis();
 						}, 100);
 					}
 				}
@@ -1218,7 +1300,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 			const axisMode = computeTimeAxisModeFromPattern(timePatternInput ? timePatternInput.value : DEFAULT_UPTIME_TIME_PATTERN);
 			currentTimeAxisMode = axisMode;
-			const xAxisTitle = axisMode === 'rtc' ? 'Time (RTC)' : 'Time (uptime)';
+			const xAxisTitle = axisMode === 'rtc' ? 'RTC DateTime' : 'CPU Uptime (ms)';
 			const xAxisType = axisMode === 'rtc' ? 'date' : 'linear';
 			const xTickFormat = axisMode === 'rtc' ? '%H:%M:%S.%L' : undefined;
 			const xHoverFormat = axisMode === 'rtc' ? '%Y-%m-%d %H:%M:%S.%L' : undefined;
@@ -1232,7 +1314,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 				y: variable.data.map(d => d.value),
 				name: variable.name,
 				yaxis: variable.axis === 'y2' ? 'y2' : 'y',
-				legend: variable.axis === 'y2' ? 'legend2' : 'legend',
+				legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
+				// Hide all traces from Plotly's native legend (using custom legends)
+				showlegend: false,
 				type: 'scatter',
 				mode: 'lines',
 				line: {
@@ -1293,32 +1377,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				font: {
 					color: 'var(--vscode-foreground)'
 				},
-				// Legend for Y1 (Left)
-				legend: {
-					orientation: 'h',
-					x: 0,
-					y: 1.15,
-					xanchor: 'left',
-					yanchor: 'bottom',
-					bgcolor: 'transparent',
-					bordercolor: 'var(--vscode-panel-border)',
-					font: {
-						color: 'var(--vscode-foreground)'
-					}
-				},
-				// Legend for Y2 (Right)
-				legend2: {
-					orientation: 'h',
-					x: 1,
-					y: 1.15,
-					xanchor: 'right',
-					yanchor: 'bottom',
-					bgcolor: 'transparent',
-					bordercolor: 'var(--vscode-panel-border)',
-					font: {
-						color: 'var(--vscode-foreground)'
-					}
-				},
+				// Hide Plotly's native legend (using custom HTML legends)
+				showlegend: false,
 				margin: { l: 60, r: 60, t: 80, b: 50 },
 				hovermode: 'x unified'
 			};
@@ -1369,29 +1429,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 		function extractNumbers(text) {
 			// Remove ANSI codes first
 			const plainText = stripAnsiCodes(text);
-			console.log('FancyMon: extractNumbers - plainText:', plainText, 'length:', plainText.length);
-			// Match numbers (integers and decimals) - use RegExp constructor to avoid template literal issues
-			// Match: optional minus, digits, optional decimal point and more digits
-			// Need quadruple backslashes because we're inside a template literal
-			// The string '(-?\\\\d+(?:\\\\.\\\\d+)?)' becomes '(-?\\d+(?:\\.\\d+)?)' which is correct
-			const numberRegex = new RegExp('(-?\\\\d+(?:\\\\.\\\\d+)?)', 'g');
-			console.log('FancyMon: extractNumbers - regex pattern:', numberRegex.toString());
+			// Match numbers (integers and decimals) - use String.fromCharCode to build regex pattern
+			const bs = String.fromCharCode(92);
+			const numberRegex = new RegExp('(-?' + bs + 'd+(?:' + bs + '.' + bs + 'd+)?)', 'g');
 			const matches = [];
 			let match;
 			let execCount = 0;
 			while ((match = numberRegex.exec(plainText)) !== null) {
 				execCount++;
-				console.log('FancyMon: extractNumbers - match found:', match, 'at index:', match.index);
 				const numberText = match[1];
 				const numberValue = parseFloat(numberText);
-				console.log('FancyMon: extractNumbers - numberText:', numberText, 'parsed:', numberValue, 'isNaN:', isNaN(numberValue), 'isFinite:', isFinite(numberValue));
 				// Validate it's actually a valid number (not NaN and finite)
 				if (!isNaN(numberValue) && isFinite(numberValue) && numberText.length > 0) {
 					// Additional validation: ensure the matched text only contains digits, minus, and decimal point
-					// Need quadruple backslashes because we're inside a template literal
-					const validNumberRegex = new RegExp('^-?\\\\d+(\\\\.\\\\d+)?$');
+					const validNumberRegex = new RegExp('^-?' + bs + 'd+(' + bs + '.' + bs + 'd+)?$');
 					const isValid = validNumberRegex.test(numberText);
-					console.log('FancyMon: extractNumbers - validation regex test:', isValid, 'for:', numberText);
 					if (isValid) {
 						matches.push({
 							index: matches.length + 1,
@@ -1399,7 +1451,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 							text: numberText,
 							position: match.index
 						});
-						console.log('FancyMon: extractNumbers - added match:', matches[matches.length - 1]);
 					}
 				}
 				// Safety check to prevent infinite loops
@@ -1408,7 +1459,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 					break;
 				}
 			}
-			console.log('FancyMon: extractNumbers - total exec count:', execCount, 'found:', matches.length, 'matches:', matches);
 			return matches;
 		}
 
@@ -1565,39 +1615,48 @@ export function getWebviewContentHtml(cspSource: string): string {
 		//   "bar 99"      -> "bar"
 		//   "baz99"       -> "baz"
 		function suggestVariableNameFromContext(text, numberPosition) {
-			if (typeof numberPosition !== 'number' || numberPosition <= 0) {
+			if (typeof numberPosition !== 'number' || numberPosition < 0) {
 				return null;
 			}
 
-			const plainText = stripAnsiCodes(text || '');
+			// text is already stripped in our context, but ensure consistency
+			const plainText = text || '';
 			let i = Math.min(numberPosition - 1, plainText.length - 1);
 			if (i < 0) {
 				return null;
 			}
 
 			// Skip whitespace directly before number
-			while (i >= 0 && /\s/.test(plainText[i])) {
+			// Use RegExp constructor to avoid template literal escaping issues with /\s/
+			const wsRegex = new RegExp(String.fromCharCode(92) + 's');
+			while (i >= 0 && wsRegex.test(plainText[i])) {
 				i--;
 			}
 
 			// Optional ':' or '=' separator, then optional whitespace
 			if (i >= 0 && (plainText[i] === ':' || plainText[i] === '=')) {
 				i--;
-				while (i >= 0 && /\s/.test(plainText[i])) {
+				while (i >= 0 && wsRegex.test(plainText[i])) {
 					i--;
 				}
 			}
 
 			// Scan backwards for identifier characters
+			// end should be the last character of the identifier (before separator)
+			// i is currently at the last identifier character
 			const end = i;
-			while (i >= 0 && /[A-Za-z0-9_]/.test(plainText[i])) {
-				i--;
+			let scanI = i;
+			const identifierRegex = new RegExp('[A-Za-z0-9_]');
+			while (scanI >= 0 && identifierRegex.test(plainText[scanI])) {
+				scanI--;
 			}
 
-			const start = i + 1;
-			if (start <= end) {
+			const start = scanI + 1;
+			// end is the last character position, so substring should be (start, end + 1)
+			if (start <= end && end >= 0 && end < plainText.length) {
 				const token = plainText.substring(start, end + 1);
-				if (/^[A-Za-z_]/.test(token)) {
+				const startsWithLetter = new RegExp('^[A-Za-z_]');
+				if (startsWithLetter.test(token)) {
 					return token;
 				}
 			}
@@ -1773,7 +1832,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					const nameInput = document.createElement('input');
 					nameInput.type = 'text';
 					// Prefer auto-suggested identifier name (TEMP/voltage/etc); include value in parentheses as a hint
-					const suggestedName = suggestVariableNameFromContext(text, num.position);
+					// num.position is in plainText (stripped), so use plainText for name extraction
+					const suggestedName = suggestVariableNameFromContext(plainText, num.position);
 					nameInput.placeholder = suggestedName ? (suggestedName + ' (' + num.text + ')') : num.text;
 					nameInput.style.width = '120px';
 					nameInput.style.marginRight = '5px';
@@ -1917,7 +1977,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 				if (!name) {
 					const numObj = extractedNumbers.find(n => n.index === numIndex);
 					if (numObj) {
-						const suggested = suggestVariableNameFromContext(rawText, numObj.position);
+						// numObj.position is in plainText (full stripped text).
+						// For name extraction, use the FULL plainText (not patternSourceText).
+						const suggested = suggestVariableNameFromContext(plainText, numObj.position);
 						name = suggested || numObj.text;
 					} else {
 						name = 'variable' + numIndex;
@@ -1932,11 +1994,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const numObjForKey = extractedNumbers.find(n => n.index === numIndex);
 				if (numObjForKey) {
 					// Use patternSourceText (after time token) for key detection, since that's what we'll match against at runtime.
-					// Adjust position: if matchFromTimeToken, subtract timeEnd; otherwise use position as-is.
-					const keyPosition = matchFromTimeToken 
-						? numObjForKey.position - timeEnd 
-						: numObjForKey.position;
-					if (keyPosition >= 0) {
+					// IMPORTANT: extractedNumbers positions are in plainText (full text), but we need position in patternSourceText.
+					// If matchFromTimeToken, we need to find the number's position in patternSourceText.
+					let keyPosition;
+					if (matchFromTimeToken) {
+						// The position in numObjForKey is in plainText (full stripped text).
+						// patternSourceText is plainText.substring(timeEnd), so we just subtract timeEnd.
+						keyPosition = numObjForKey.position - timeEnd;
+					} else {
+						keyPosition = numObjForKey.position;
+					}
+					if (keyPosition >= 0 && keyPosition < patternSourceText.length) {
 						keyName = suggestVariableNameFromContext(patternSourceText, keyPosition);
 					}
 				}
@@ -1945,7 +2013,19 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// keyName comes from suggestVariableNameFromContext and is limited to [A-Za-z_][A-Za-z0-9_]*,
 					// so it is already safe to embed directly into a RegExp pattern without extra escaping.
 					// Allow optional units (V, mA, %, ms, mV, s, etc.) after the number.
-					? new RegExp('(?:^|[^A-Za-z0-9_])' + keyName + '\\\\s*[=:]\\\\s*(-?\\\\d+\\\\.?\\\\d*)(?:\\\\s*[A-Za-z%]+)?')
+					? (() => {
+						// Build pattern string - use String.fromCharCode to avoid template literal backslash issues
+						// We need \s (whitespace) and \d (digit) in the regex, so we build the pattern carefully
+						const bs = String.fromCharCode(92); // backslash
+						// Pattern: (?:^|[^A-Za-z0-9_])KEYNAME\s*[=:]\s*(-?\d+\.?\d*)(?:\s*[A-Za-z%]+)?
+						const pattern = '(?:^|[^A-Za-z0-9_])' + keyName + bs + 's*[=:]' + bs + 's*(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
+						try {
+							return new RegExp(pattern);
+						} catch (e) {
+							console.error('FancyMon: Failed to create keyRegex:', e, 'pattern:', pattern);
+							return null;
+						}
+					})()
 					: null;
 				
 				
@@ -1977,7 +2057,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 						y: [],
 						name: variable.name,
 						yaxis: axis === 'y2' ? 'y2' : 'y',
-						legend: axis === 'y2' ? 'legend2' : 'legend',
+						legendgroup: axis === 'y2' ? 'y2' : 'y1',
+						// Hide all traces from Plotly's native legend (using custom legends)
+						showlegend: false,
 						type: 'scatter',
 						mode: 'lines',
 						line: {
@@ -2055,6 +2137,102 @@ export function getWebviewContentHtml(cspSource: string): string {
 				item.appendChild(removeBtn);
 				variablesList.appendChild(item);
 			});
+			
+			// Update custom legends
+			updateY1Legend();
+			updateY2Legend();
+		}
+		
+		// Update custom Y1 legend (left side)
+		function updateY1Legend() {
+			const y1Legend = document.getElementById('y1Legend');
+			if (!y1Legend) return;
+			
+			const y1Variables = plotVariables.filter(v => v.axis !== 'y2');
+			
+			if (y1Variables.length === 0) {
+				y1Legend.style.display = 'none';
+				return;
+			}
+			
+			y1Legend.style.display = 'block';
+			y1Legend.innerHTML = '';
+			
+			y1Variables.forEach((variable) => {
+				const item = document.createElement('div');
+				item.className = 'custom-legend-item';
+				item.dataset.variableId = variable.id;
+				
+				const colorBox = document.createElement('span');
+				colorBox.className = 'custom-legend-color';
+				colorBox.style.backgroundColor = variable.color;
+				
+				const nameSpan = document.createElement('span');
+				nameSpan.textContent = variable.name;
+				
+				item.appendChild(colorBox);
+				item.appendChild(nameSpan);
+				
+				// Click to toggle visibility
+				item.addEventListener('click', () => {
+					if (plotInitialized && plotDiv) {
+						const traceIndex = plotVariables.findIndex(v => v.id === variable.id);
+						if (traceIndex >= 0) {
+							const isHidden = item.classList.contains('hidden');
+							Plotly.restyle(plotDiv, { visible: isHidden ? true : 'legendonly' }, [traceIndex]);
+							item.classList.toggle('hidden');
+						}
+					}
+				});
+				
+				y1Legend.appendChild(item);
+			});
+		}
+		
+		// Update custom Y2 legend (right side)
+		function updateY2Legend() {
+			const y2Legend = document.getElementById('y2Legend');
+			if (!y2Legend) return;
+			
+			const y2Variables = plotVariables.filter(v => v.axis === 'y2');
+			
+			if (y2Variables.length === 0) {
+				y2Legend.style.display = 'none';
+				return;
+			}
+			
+			y2Legend.style.display = 'block';
+			y2Legend.innerHTML = '';
+			
+			y2Variables.forEach((variable) => {
+				const item = document.createElement('div');
+				item.className = 'custom-legend-item';
+				item.dataset.variableId = variable.id;
+				
+				const colorBox = document.createElement('span');
+				colorBox.className = 'custom-legend-color';
+				colorBox.style.backgroundColor = variable.color;
+				
+				const nameSpan = document.createElement('span');
+				nameSpan.textContent = variable.name;
+				
+				item.appendChild(colorBox);
+				item.appendChild(nameSpan);
+				
+				// Click to toggle visibility
+				item.addEventListener('click', () => {
+					if (plotInitialized && plotDiv) {
+						const traceIndex = plotVariables.findIndex(v => v.id === variable.id);
+						if (traceIndex >= 0) {
+							const isHidden = item.classList.contains('hidden');
+							Plotly.restyle(plotDiv, { visible: isHidden ? true : 'legendonly' }, [traceIndex]);
+							item.classList.toggle('hidden');
+						}
+					}
+				});
+				
+				y2Legend.appendChild(item);
+			});
 		}
 
 		// Remove variable
@@ -2069,6 +2247,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 
 			updateVariablesList();
+			updateY1Legend();
+			updateY2Legend();
 		}
 
 		// Extract time value from line
@@ -2107,9 +2287,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 
 				// Fallback for RTC datetime
-				const rtcFallback = new RegExp(RTC_DATETIME_TIME_PATTERN).exec(line);
-				if (rtcFallback && rtcFallback[1]) {
-					return rtcFallback[1].replace(' ', 'T');
+				// Use tryParseBracketedRtcDatetime instead of regex to avoid escaping issues
+				const rtcFallback = tryParseBracketedRtcDatetime(line);
+				if (rtcFallback && rtcFallback.inner) {
+					return rtcFallback.inner.replace(' ', 'T');
 				}
 			} catch (e) {
 				console.error('Error extracting time:', e);
@@ -2156,6 +2337,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 								}
 								chartNeedsUpdate = true;
 							}
+						} else {
+							console.log('FancyMon: keyRegex did not match for', variable.name, 'keyName:', variable.keyName, 'matchText sample:', matchText.substring(0, 100));
 						}
 						return;
 					}
@@ -3930,7 +4113,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const chosen = timePatternDropdownItems[index]?.pattern;
 			if (!chosen) return;
 
-			timePatternInput.value = normalizeTimePatternInputValue(chosen);
+			// Normalize the pattern, but pinned patterns should already be correct
+			// Check if it's a pinned pattern first
+			const isPinned = PINNED_TIME_PATTERNS.some(p => p.pattern === chosen);
+			const normalized = normalizeTimePatternInputValue(chosen);
+			timePatternInput.value = normalized;
 			timePatternHistoryDropdown.style.display = 'none';
 			selectedTimePatternHistoryIndex = -1;
 
@@ -4426,6 +4613,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 					}
 					updateTimePatternHintAndAxis();
 					updateExtractionPreview();
+					// If chart is already initialized, ensure axis title is correct
+					if (plotInitialized && plotDiv) {
+						const mode = computeTimeAxisModeFromPattern(timePatternInput ? timePatternInput.value : DEFAULT_UPTIME_TIME_PATTERN);
+						const xTitle = mode === 'rtc' ? 'RTC DateTime' : 'CPU Uptime (ms)';
+						Plotly.relayout(plotDiv, {
+							'xaxis.title.text': xTitle
+						});
+					}
 					break;
 				case 'connected':
 					console.log('FancyMon: Received connected message!');
