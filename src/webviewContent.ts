@@ -474,9 +474,30 @@ export function getWebviewContentHtml(cspSource: string): string {
 			font-size: 12px;
 		}
 
-		.plot-control-row input[type="text"] {
+		.plot-control-row input[type="text"],
+		.plot-control-row select {
 			flex: 1;
 			min-width: 200px;
+			background-color: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+			border: 1px solid var(--vscode-input-border);
+			border-radius: 2px;
+			padding: 4px 8px;
+			font-size: 12px;
+			font-family: var(--vscode-font-family);
+		}
+
+		.plot-control-row select {
+			cursor: pointer;
+		}
+
+		.plot-control-row select:hover {
+			border-color: var(--vscode-inputOption-activeBorder);
+		}
+
+		.plot-control-row select:focus {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: -1px;
 		}
 
 		.extraction-preview {
@@ -759,8 +780,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<span id="timePatternHint" style="font-size: 11px; color: var(--vscode-descriptionForeground);">Extracts uptime from parentheses</span>
 			</div>
 			<div class="plot-control-row">
+				<label>Session:</label>
+				<select id="sessionSelect" style="flex: 1; min-width: 200px;">
+					<option value="">New session</option>
+				</select>
+			</div>
+			<div class="plot-control-row">
 				<label>Pattern Input:</label>
-				<input type="text" id="patternInput" placeholder="Enter or paste line text here...">
+				<input type="text" id="patternInput" placeholder="Enter or paste line text here..." style="flex: 1; min-width: 200px;">
 			</div>
 			<div class="plot-control-row">
 				<label>Extracted Numbers:</label>
@@ -961,6 +988,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let currentActiveTab = 'monitor';
 		let selectedNumbers = new Map(); // Track which number indices are selected and their axis ('y' or 'y2')
 		let extractedNumbers = []; // Current extracted numbers from pattern input
+		let plotSessions = []; // Array of saved plot sessions
+		const sessionSelect = document.getElementById('sessionSelect');
+		let isLoadingSession = false; // Flag to prevent auto-save during session loading
 
 		function normalizeTimePatternInputValue(pattern) {
 			// Our pinned patterns used to be incorrectly double-escaped (e.g. "\\\\d{4}" shown as "\\d{4}" in the UI).
@@ -2079,6 +2109,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			selectedNumbers.clear();
 			patternInput.value = '';
 			updateExtractionPreview();
+			
+			// Auto-save session when variables change
+			saveCurrentSession();
 		}
 
 		// Get next color for variable
@@ -2249,6 +2282,193 @@ export function getWebviewContentHtml(cspSource: string): string {
 			updateVariablesList();
 			updateY1Legend();
 			updateY2Legend();
+			
+			// Auto-save session when variables change
+			saveCurrentSession();
+		}
+
+		// Generate a unique key for a session based on variable list
+		function generateSessionKey(variables) {
+			if (!variables || variables.length === 0) return '';
+			const names = variables.map(v => v.name || '').filter(n => n).sort();
+			return names.join(', ');
+		}
+
+		// Save current session
+		function saveCurrentSession() {
+			if (isLoadingSession) return; // Don't save while loading
+			if (!timePatternInput || !patternInput) return;
+			
+			const variableList = generateSessionKey(plotVariables);
+			if (!variableList) return; // Don't save empty sessions
+			
+			const session = {
+				timePattern: timePatternInput.value || '',
+				extractionPattern: patternInput.value || '',
+				variableList: variableList,
+				variables: plotVariables.map(v => ({
+					name: v.name,
+					pattern: v.pattern,
+					captureIndex: v.captureIndex,
+					keyName: v.keyName,
+					axis: v.axis,
+					color: v.color
+				}))
+			};
+			
+			vscode.postMessage({
+				command: 'savePlotSession',
+				session: session
+			});
+			
+			// Request updated sessions list to refresh dropdown
+			vscode.postMessage({
+				command: 'loadPlotSessions'
+			});
+		}
+
+		// Load a session
+		function loadSession(session) {
+			console.log('FancyMon: Loading session:', session);
+			if (!session || !timePatternInput || !patternInput) {
+				console.error('FancyMon: Cannot load session - missing session or inputs');
+				return;
+			}
+			
+			isLoadingSession = true;
+			
+			// Clear current variables (without triggering save)
+			while (plotVariables.length > 0) {
+				const index = plotVariables.findIndex(v => v.id === plotVariables[0].id);
+				if (index === -1) break;
+				
+				plotVariables.splice(index, 1);
+				
+				if (plotInitialized && plotDiv) {
+					Plotly.deleteTraces(plotDiv, index);
+				}
+			}
+			
+			updateVariablesList();
+			updateY1Legend();
+			updateY2Legend();
+			
+			// Restore patterns first
+			if (session.timePattern) {
+				timePatternInput.value = session.timePattern;
+				updateTimePatternHintAndAxis();
+			}
+			
+			const extractionPattern = session.extractionPattern || '';
+			if (extractionPattern) {
+				patternInput.value = extractionPattern;
+				updateExtractionPreview();
+			}
+			
+			// Restore variables - use saved pattern and captureIndex directly
+			if (session.variables && session.variables.length > 0) {
+				// Use the saved pattern from the first variable (they all share the same pattern)
+				const savedPattern = session.variables[0].pattern;
+				if (savedPattern) {
+					const regex = new RegExp(savedPattern);
+					
+					// Determine if we should match from time token (check if we have extraction pattern)
+					const plainText = stripAnsiCodes(extractionPattern);
+					const timeEnd = plainText ? getTimeTokenEndIndexForLine(plainText) : 0;
+					
+					session.variables.forEach((savedVar, idx) => {
+						// Reconstruct keyRegex if we have keyName
+						let keyRegex = null;
+						if (savedVar.keyName) {
+							const bs = String.fromCharCode(92);
+							const keyName = savedVar.keyName;
+							const keyPattern = '(?:^|[^A-Za-z0-9_])' + keyName + bs + 's*[=:]' + bs + 's*(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
+							try {
+								keyRegex = new RegExp(keyPattern);
+							} catch (e) {
+								console.error('FancyMon: Failed to recreate keyRegex:', e);
+							}
+						}
+						
+						const variable = {
+							id: Date.now() + '-' + idx,
+							name: savedVar.name,
+							pattern: savedPattern,
+							regex: regex,
+							captureIndex: savedVar.captureIndex || (idx + 1), // Use saved captureIndex
+							keyName: savedVar.keyName,
+							keyRegex: keyRegex,
+							data: [],
+							color: savedVar.color || getNextColor(),
+							axis: savedVar.axis || 'y',
+							matchFromTimeToken: timeEnd > 0
+						};
+						
+						plotVariables.push(variable);
+						
+						// Add trace to plot
+						if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
+							initializeChart();
+						} else if (plotInitialized) {
+							const newTrace = {
+								x: [],
+								y: [],
+								name: variable.name,
+								yaxis: variable.axis === 'y2' ? 'y2' : 'y',
+								legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
+								showlegend: false,
+								type: 'scatter',
+								mode: 'lines',
+								line: {
+									color: variable.color,
+									width: 2
+								},
+								hovertemplate: currentTimeAxisMode === 'rtc'
+									? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
+									: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+							};
+							Plotly.addTraces(plotDiv, newTrace);
+						}
+					});
+					
+					console.log('FancyMon: Restored', plotVariables.length, 'variables');
+					updateVariablesList();
+					updateY1Legend();
+					updateY2Legend();
+				} else {
+					console.error('FancyMon: No saved pattern found in session variables');
+				}
+			}
+			
+			isLoadingSession = false;
+		}
+
+		// Update session dropdown
+		function updateSessionDropdown() {
+			if (!sessionSelect) {
+				console.error('FancyMon: sessionSelect element not found in updateSessionDropdown');
+				return;
+			}
+			
+			console.log('FancyMon: Updating session dropdown with', plotSessions.length, 'sessions');
+			// Keep the "New session" option
+			const currentValue = sessionSelect.value;
+			sessionSelect.innerHTML = '<option value="">New session</option>';
+			
+			plotSessions.forEach((session, index) => {
+				const option = document.createElement('option');
+				option.value = index.toString();
+				option.textContent = session.variableList || 'Empty session';
+				sessionSelect.appendChild(option);
+			});
+			
+			// Restore selection if it was a valid session
+			if (currentValue && currentValue !== '') {
+				const sessionIndex = parseInt(currentValue, 10);
+				if (!isNaN(sessionIndex) && sessionIndex >= 0 && sessionIndex < plotSessions.length) {
+					sessionSelect.value = currentValue;
+				}
+			}
 		}
 
 		// Extract time value from line
@@ -2392,6 +2612,53 @@ export function getWebviewContentHtml(cspSource: string): string {
 		// Event listeners for plot controls
 		if (patternInput) {
 			patternInput.addEventListener('input', updateExtractionPreview);
+		}
+		
+		// Session selector
+		if (sessionSelect) {
+			console.log('FancyMon: Session select element found');
+			sessionSelect.addEventListener('change', () => {
+				const selectedIndex = sessionSelect.value;
+				console.log('FancyMon: Session select changed, value:', selectedIndex, 'plotSessions.length:', plotSessions.length);
+				if (selectedIndex === '' || selectedIndex === null) {
+					// "New session" selected - clear everything
+					if (!isLoadingSession) {
+						// Clear current variables
+						while (plotVariables.length > 0) {
+							const index = plotVariables.findIndex(v => v.id === plotVariables[0].id);
+							if (index === -1) break;
+							
+							plotVariables.splice(index, 1);
+							
+							if (plotInitialized && plotDiv) {
+								Plotly.deleteTraces(plotDiv, index);
+							}
+						}
+						
+						updateVariablesList();
+						updateY1Legend();
+						updateY2Legend();
+						
+						// Clear patterns
+						if (patternInput) patternInput.value = '';
+						if (timePatternInput) timePatternInput.value = '';
+						updateExtractionPreview();
+						updateTimePatternHintAndAxis();
+					}
+				} else {
+					// Session selected - load it
+					const sessionIndex = parseInt(selectedIndex, 10);
+					console.log('FancyMon: Parsed session index:', sessionIndex);
+					if (!isNaN(sessionIndex) && sessionIndex >= 0 && sessionIndex < plotSessions.length) {
+						console.log('FancyMon: Loading session at index', sessionIndex, ':', plotSessions[sessionIndex]);
+						loadSession(plotSessions[sessionIndex]);
+					} else {
+						console.error('FancyMon: Invalid session index:', sessionIndex, 'plotSessions.length:', plotSessions.length);
+					}
+				}
+			});
+		} else {
+			console.error('FancyMon: Session select element not found!');
 		}
 
 		if (timePatternInput) {
@@ -4620,6 +4887,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 						Plotly.relayout(plotDiv, {
 							'xaxis.title.text': xTitle
 						});
+					}
+					break;
+					
+				case 'plotSessionsLoaded':
+					console.log('FancyMon: Received plotSessionsLoaded, sessions:', message.sessions);
+					if (message.sessions && Array.isArray(message.sessions)) {
+						plotSessions = [...message.sessions];
+						console.log('FancyMon: Loaded', plotSessions.length, 'sessions');
+						updateSessionDropdown();
 					}
 					break;
 				case 'connected':

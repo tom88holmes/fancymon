@@ -29,6 +29,7 @@ export class SerialMonitor {
 	private readonly excludeFilterHistoryKey = 'fancymon.excludeFilterHistory';
 	private readonly timePatternHistoryKey = 'fancymon.timePatternHistory';
 	private readonly timePatternValueKey = 'fancymon.timePatternValue';
+	private readonly plotSessionsKey = 'fancymon.plotSessions';
 	private readonly elfFileKey = 'fancymon.elfFile';
 	public connection: SerialConnection; // Made public for external access
 
@@ -213,6 +214,41 @@ export class SerialMonitor {
 						}
 						break;
 
+					case 'savePlotSession':
+						// Save a plot session
+						if (message.session) {
+							const sessions = this.context.workspaceState.get<any[]>(this.plotSessionsKey) || [];
+							// Remove existing session with same variable list (if any)
+							const variableListKey = message.session.variableList || '';
+							const filtered = sessions.filter((s: any) => (s.variableList || '') !== variableListKey);
+							// Add new session at the beginning
+							filtered.unshift(message.session);
+							// Keep only last 10 unique sessions
+							const unique = [];
+							const seen = new Set<string>();
+							for (const session of filtered) {
+								const key = session.variableList || '';
+								if (key && !seen.has(key)) {
+									seen.add(key);
+									unique.push(session);
+									if (unique.length >= 10) {
+										break;
+									}
+								}
+							}
+							this.context.workspaceState.update(this.plotSessionsKey, unique);
+						}
+						break;
+
+					case 'loadPlotSessions':
+						// Load all plot sessions
+						const sessions = this.context.workspaceState.get<any[]>(this.plotSessionsKey) || [];
+						this.sendMessage({
+							command: 'plotSessionsLoaded',
+							sessions: sessions
+						});
+						break;
+
 					case 'selectElfFile':
 						const uris = await vscode.window.showOpenDialog({
 							canSelectFiles: true,
@@ -366,6 +402,9 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			const timePatternHistory = this.context.workspaceState.get<string[]>(this.timePatternHistoryKey) || [];
 			const timePatternValue = this.context.workspaceState.get<string>(this.timePatternValueKey);
 			
+			// Get plot sessions
+			const plotSessions = this.context.workspaceState.get<any[]>(this.plotSessionsKey) || [];
+			
 			this.sendMessage({
 				command: 'portsListed',
 				ports: ports,
@@ -399,6 +438,12 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			this.sendMessage({
 				command: 'timePatternValueLoaded',
 				value: timePatternValue ?? ''
+			});
+
+			// Send plot sessions
+			this.sendMessage({
+				command: 'plotSessionsLoaded',
+				sessions: [...plotSessions]
 			});
 
 			// Restore ELF file

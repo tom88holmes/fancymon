@@ -65,6 +65,19 @@ None at this time. If you encounter any issues, please report them on the extens
 
 ## Release Notes
 
+### 0.0.6
+
+Major improvements to plotting functionality and session management:
+- **Plot Session Persistence**: Save and restore plot configurations including time patterns, extraction patterns, and variable lists. Sessions are automatically saved when variables change and can be quickly restored from a dropdown menu.
+- **X-Axis Label Fixes**: Fixed X-axis labels to correctly show "RTC DateTime" when using the pinned RTC datetime pattern instead of always showing "CPU Uptime (ms)".
+- **Custom HTML Legends**: Replaced Plotly's native legend with custom HTML legends for both Y1 and Y2 axes, providing better control over positioning and styling.
+- **Y2 Legend Improvements**: 
+  - Moved Y2 legend further left to avoid overlapping buttons and plot area
+  - Implemented two-column grid layout for Y2 legend to better accommodate multiple variables
+  - Changed legend text color to black for better visibility on white backgrounds
+- **Auto-Naming Fixes**: Fixed variable name extraction issues, including the `soc_obs` truncation bug that was caused by regex literal corruption in template strings.
+- **Pattern Detection**: Improved RTC datetime pattern detection to correctly identify pinned RTC patterns.
+
 ### 0.0.5
 
 Enhanced plotting capabilities with dual Y-axis support and improved variable management:
