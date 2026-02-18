@@ -31,6 +31,9 @@
     "terminal"
   ],
   "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -61,6 +64,11 @@
           "type": "string",
           "default": "",
           "description": "Path to the ESP-IDF toolchain bin directory (containing addr2line tools). If empty, FancyMon will try to auto-discover it."
+        },
+        "fancymon.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start the serial monitor when VS Code starts. If enabled, the monitor panel will open automatically on startup."
         }
       }
     }

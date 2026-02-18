@@ -192,6 +192,20 @@ export function activate(context: vscode.ExtensionContext) {
 		const fancymonCmds = cmds.filter(c => c.includes('fancymon'));
 		console.log('FancyMon commands found:', fancymonCmds);
 	}));
+
+	// Check if auto-start is enabled
+	const config = vscode.workspace.getConfiguration('fancymon');
+	const autoStart = config.get<boolean>('autoStart', false);
+	
+	if (autoStart) {
+		console.log('FancyMon: Auto-start enabled, starting serial monitor...');
+		// Delay slightly to ensure VS Code is fully initialized
+		setTimeout(() => {
+			vscode.commands.executeCommand('fancymon.start').then(undefined, (error: unknown) => {
+				console.error('FancyMon: Failed to auto-start:', error);
+			});
+		}, 1000);
+	}
 }
 
 export async function deactivate() {
