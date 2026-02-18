@@ -800,6 +800,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			<div class="plot-control-row">
 				<button id="addVariableBtn" disabled>Add Variable to Plot</button>
 				<button id="clearPlotBtn">Clear Plot</button>
+				<button id="removeAllVariablesBtn">Remove All Variables</button>
 				<button id="pausePlotBtn">Pause</button>
 			</div>
 			<div class="variables-list" id="variablesList">
@@ -976,6 +977,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const numberSelector = document.getElementById('numberSelector');
 		const addVariableBtn = document.getElementById('addVariableBtn');
 		const clearPlotBtn = document.getElementById('clearPlotBtn');
+		const removeAllVariablesBtn = document.getElementById('removeAllVariablesBtn');
 		const pausePlotBtn = document.getElementById('pausePlotBtn');
 		const variablesList = document.getElementById('variablesList');
 		const timePatternInput = document.getElementById('timePatternInput');
@@ -1981,7 +1983,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (!patternResult) return;
 			
 			const { pattern, sortedNumbers } = patternResult;
-			const regex = new RegExp(pattern);
+			const regex = safeRegExp(pattern, undefined, 'addVariableToPlot');
+			if (!regex) {
+				return;
+			}
+
+			const usedY1Colors = new Set(plotVariables.filter(v => v.axis !== 'y2').map(v => v.color).filter(c => c));
+			const usedY2Colors = new Set(plotVariables.filter(v => v.axis === 'y2').map(v => v.color).filter(c => c));
 
 			selectedNumbers.forEach((axis, numIndex) => {
 				// numIndex is the index in the *filtered* list shown in the UI (1..N).
@@ -2015,7 +2023,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 						name = 'variable' + numIndex;
 					}
 				}
-				const color = getNextColor(plotVariables.length);
+				const axisKey = axis === 'y2' ? 'y2' : 'y';
+				const color = resolveVariableColor(
+					axisKey,
+					null,
+					axisKey === 'y2' ? usedY2Colors : usedY1Colors,
+					axisKey === 'y2' ? usedY1Colors : null
+				);
+				if (axisKey === 'y2') {
+					usedY2Colors.add(color);
+				} else {
+					usedY1Colors.add(color);
+				}
 
 				// If we can identify a key name (e.g. "V_term", "soc_obs"), prefer key-based matching.
 				// This is dramatically more robust than a fully-literal line pattern, because log formatting
@@ -2071,7 +2090,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					keyRegex: keyRegex,
 					data: [],
 					color: color,
-					axis: axis,
+					axis: axisKey,
 					matchFromTimeToken: matchFromTimeToken
 				};
 
@@ -2086,8 +2105,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 						x: [],
 						y: [],
 						name: variable.name,
-						yaxis: axis === 'y2' ? 'y2' : 'y',
-						legendgroup: axis === 'y2' ? 'y2' : 'y1',
+						yaxis: axisKey === 'y2' ? 'y2' : 'y',
+						legendgroup: axisKey === 'y2' ? 'y2' : 'y1',
 						// Hide all traces from Plotly's native legend (using custom legends)
 						showlegend: false,
 						type: 'scatter',
@@ -2115,18 +2134,60 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		// Get next color for variable
-		function getNextColor(index) {
-			const colors = [
-				'rgb(54, 162, 235)',   // Blue
-				'rgb(255, 99, 132)',   // Red
-				'rgb(75, 192, 192)',   // Teal
-				'rgb(255, 159, 64)',   // Orange
-				'rgb(153, 102, 255)',  // Purple
-				'rgb(255, 205, 86)',   // Yellow
-				'rgb(201, 203, 207)',  // Grey
-				'rgb(255, 99, 255)'    // Magenta
-			];
-			return colors[index % colors.length];
+		const Y1_COLORS = [
+			'rgb(54, 162, 235)',   // Blue
+			'rgb(255, 99, 132)',   // Red
+			'rgb(75, 192, 192)',   // Teal
+			'rgb(255, 159, 64)',   // Orange
+			'rgb(153, 102, 255)',  // Purple
+			'rgb(255, 205, 86)',   // Yellow
+			'rgb(201, 203, 207)',  // Grey
+			'rgb(255, 99, 255)'    // Magenta
+		];
+		const Y2_COLORS = [
+			'rgb(0, 200, 83)',     // Green
+			'rgb(255, 112, 67)',   // Deep Orange
+			'rgb(124, 77, 255)',   // Deep Purple
+			'rgb(0, 172, 193)',    // Cyan
+			'rgb(216, 27, 96)',    // Pink
+			'rgb(255, 193, 7)',    // Amber
+			'rgb(100, 181, 246)',  // Light Blue
+			'rgb(174, 213, 129)'   // Light Green
+		];
+
+		function generateDistinctColor(usedColors) {
+			let i = 0;
+			while (i < 360) {
+				const color = 'hsl(' + ((i * 47) % 360) + ', 70%, 55%)';
+				if (!usedColors.has(color)) {
+					return color;
+				}
+				i++;
+			}
+			return 'hsl(0, 0%, 70%)';
+		}
+
+		function getNextColorForAxis(axis, usedColors) {
+			const palette = axis === 'y2' ? Y2_COLORS : Y1_COLORS;
+			for (const color of palette) {
+				if (!usedColors.has(color)) {
+					return color;
+				}
+			}
+			return generateDistinctColor(usedColors);
+		}
+
+		function resolveVariableColor(axis, preferredColor, usedColors, forbiddenColors) {
+			const disallowed = new Set(usedColors);
+			if (forbiddenColors) {
+				for (const color of forbiddenColors) {
+					disallowed.add(color);
+				}
+			}
+			if (preferredColor && !disallowed.has(preferredColor)) {
+				return preferredColor;
+			}
+			return getNextColorForAxis(axis, disallowed);
 		}
 
 		// Update variables list UI
@@ -2287,6 +2348,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 			saveCurrentSession();
 		}
 
+		function removeAllVariables() {
+			if (plotVariables.length === 0) {
+				return;
+			}
+			const traceIndices = plotVariables.map((_, idx) => idx);
+			plotVariables = [];
+			if (plotInitialized && plotDiv && traceIndices.length > 0) {
+				Plotly.deleteTraces(plotDiv, traceIndices);
+			}
+			updateVariablesList();
+			updateY1Legend();
+			updateY2Legend();
+			saveCurrentSession();
+		}
+
 		// Generate a unique key for a session based on variable list
 		function generateSessionKey(variables) {
 			if (!variables || variables.length === 0) return '';
@@ -2335,112 +2411,138 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 			
-			isLoadingSession = true;
-			
-			// Clear current variables (without triggering save)
-			while (plotVariables.length > 0) {
-				const index = plotVariables.findIndex(v => v.id === plotVariables[0].id);
-				if (index === -1) break;
+			try {
+				isLoadingSession = true;
 				
-				plotVariables.splice(index, 1);
-				
-				if (plotInitialized && plotDiv) {
-					Plotly.deleteTraces(plotDiv, index);
+				// Clear current variables (without triggering save)
+				while (plotVariables.length > 0) {
+					const index = plotVariables.findIndex(v => v.id === plotVariables[0].id);
+					if (index === -1) break;
+					
+					plotVariables.splice(index, 1);
+					
+					if (plotInitialized && plotDiv) {
+						Plotly.deleteTraces(plotDiv, index);
+					}
 				}
-			}
-			
-			updateVariablesList();
-			updateY1Legend();
-			updateY2Legend();
-			
-			// Restore patterns first
-			if (session.timePattern) {
-				timePatternInput.value = session.timePattern;
-				updateTimePatternHintAndAxis();
-			}
-			
-			const extractionPattern = session.extractionPattern || '';
-			if (extractionPattern) {
-				patternInput.value = extractionPattern;
-				updateExtractionPreview();
-			}
-			
-			// Restore variables - use saved pattern and captureIndex directly
-			if (session.variables && session.variables.length > 0) {
-				// Use the saved pattern from the first variable (they all share the same pattern)
-				const savedPattern = session.variables[0].pattern;
-				if (savedPattern) {
-					const regex = new RegExp(savedPattern);
-					
-					// Determine if we should match from time token (check if we have extraction pattern)
-					const plainText = stripAnsiCodes(extractionPattern);
-					const timeEnd = plainText ? getTimeTokenEndIndexForLine(plainText) : 0;
-					
-					session.variables.forEach((savedVar, idx) => {
-						// Reconstruct keyRegex if we have keyName
-						let keyRegex = null;
-						if (savedVar.keyName) {
-							const bs = String.fromCharCode(92);
-							const keyName = savedVar.keyName;
-							const keyPattern = '(?:^|[^A-Za-z0-9_])' + keyName + bs + 's*[=:]' + bs + 's*(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
-							try {
-								keyRegex = new RegExp(keyPattern);
-							} catch (e) {
-								console.error('FancyMon: Failed to recreate keyRegex:', e);
+				
+				updateVariablesList();
+				updateY1Legend();
+				updateY2Legend();
+				
+				// Restore patterns first
+				if (session.timePattern) {
+					timePatternInput.value = session.timePattern;
+					updateTimePatternHintAndAxis();
+				}
+				
+				const extractionPattern = session.extractionPattern || '';
+				if (extractionPattern) {
+					patternInput.value = extractionPattern;
+					updateExtractionPreview();
+				}
+				
+				// Restore variables - use saved pattern and captureIndex directly
+				if (session.variables && session.variables.length > 0) {
+					// Use the saved pattern from the first variable (they all share the same pattern)
+					const savedPattern = session.variables[0].pattern;
+					if (savedPattern) {
+						const regex = safeRegExp(savedPattern, undefined, 'loadSession: savedPattern');
+						if (!regex) {
+							return;
+						}
+						
+						const sessionY1Colors = new Set(
+							session.variables
+								.filter(v => v.axis !== 'y2')
+								.map(v => v.color)
+								.filter(c => c)
+						);
+						const usedY1Colors = new Set();
+						const usedY2Colors = new Set();
+
+						// Determine if we should match from time token (check if we have extraction pattern)
+						const plainText = stripAnsiCodes(extractionPattern);
+						const timeEnd = plainText ? getTimeTokenEndIndexForLine(plainText) : 0;
+						
+						session.variables.forEach((savedVar, idx) => {
+							const axisKey = savedVar.axis === 'y2' ? 'y2' : 'y';
+							const forbiddenY2 = axisKey === 'y2' ? sessionY1Colors : null;
+							const color = resolveVariableColor(
+								axisKey,
+								savedVar.color || null,
+								axisKey === 'y2' ? usedY2Colors : usedY1Colors,
+								forbiddenY2
+							);
+							if (axisKey === 'y2') {
+								usedY2Colors.add(color);
+							} else {
+								usedY1Colors.add(color);
 							}
-						}
-						
-						const variable = {
-							id: Date.now() + '-' + idx,
-							name: savedVar.name,
-							pattern: savedPattern,
-							regex: regex,
-							captureIndex: savedVar.captureIndex || (idx + 1), // Use saved captureIndex
-							keyName: savedVar.keyName,
-							keyRegex: keyRegex,
-							data: [],
-							color: savedVar.color || getNextColor(),
-							axis: savedVar.axis || 'y',
-							matchFromTimeToken: timeEnd > 0
-						};
-						
-						plotVariables.push(variable);
-						
-						// Add trace to plot
-						if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
-							initializeChart();
-						} else if (plotInitialized) {
-							const newTrace = {
-								x: [],
-								y: [],
-								name: variable.name,
-								yaxis: variable.axis === 'y2' ? 'y2' : 'y',
-								legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
-								showlegend: false,
-								type: 'scatter',
-								mode: 'lines',
-								line: {
-									color: variable.color,
-									width: 2
-								},
-								hovertemplate: currentTimeAxisMode === 'rtc'
-									? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
-									: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+
+							// Reconstruct keyRegex if we have keyName
+							let keyRegex = null;
+							if (savedVar.keyName) {
+								const bs = String.fromCharCode(92);
+								const keyName = savedVar.keyName;
+								const keyPattern = '(?:^|[^A-Za-z0-9_])' + keyName + bs + 's*[=:]' + bs + 's*(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
+								keyRegex = safeRegExp(keyPattern, undefined, 'loadSession: keyPattern');
+							}
+							
+							const variable = {
+								id: Date.now() + '-' + idx,
+								name: savedVar.name,
+								pattern: savedPattern,
+								regex: regex,
+								captureIndex: savedVar.captureIndex || (idx + 1), // Use saved captureIndex
+								keyName: savedVar.keyName,
+								keyRegex: keyRegex,
+								data: [],
+								color: color,
+								axis: axisKey,
+								matchFromTimeToken: timeEnd > 0
 							};
-							Plotly.addTraces(plotDiv, newTrace);
-						}
-					});
-					
-					console.log('FancyMon: Restored', plotVariables.length, 'variables');
-					updateVariablesList();
-					updateY1Legend();
-					updateY2Legend();
-				} else {
-					console.error('FancyMon: No saved pattern found in session variables');
+							
+							plotVariables.push(variable);
+							
+							// Add trace to plot
+							if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
+								initializeChart();
+							} else if (plotInitialized) {
+								const newTrace = {
+									x: [],
+									y: [],
+									name: variable.name,
+									yaxis: variable.axis === 'y2' ? 'y2' : 'y',
+									legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
+									showlegend: false,
+									type: 'scatter',
+									mode: 'lines',
+									line: {
+										color: variable.color,
+										width: 2
+									},
+									hovertemplate: currentTimeAxisMode === 'rtc'
+										? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
+										: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+								};
+								Plotly.addTraces(plotDiv, newTrace);
+							}
+						});
+						
+						console.log('FancyMon: Restored', plotVariables.length, 'variables');
+						updateVariablesList();
+						updateY1Legend();
+						updateY2Legend();
+					} else {
+						console.error('FancyMon: No saved pattern found in session variables');
+					}
 				}
+			} catch (e) {
+				console.error('FancyMon: Failed to load session:', e);
+			} finally {
+				isLoadingSession = false;
 			}
-			
-			isLoadingSession = false;
 		}
 
 		// Update session dropdown
@@ -2570,7 +2672,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 						// Execute regex and cache result
 						// If variable.regex is missing (legacy), create it
 						if (!variable.regex) {
-							variable.regex = new RegExp(variable.pattern);
+						variable.regex = safeRegExp(variable.pattern, undefined, 'processLineForPlot');
+						if (!variable.regex) {
+							return;
+						}
 						}
 						match = variable.regex.exec(matchText);
 						cache.set(variable.pattern, match);
@@ -2727,6 +2832,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 		}
 
+		if (removeAllVariablesBtn) {
+			removeAllVariablesBtn.addEventListener('click', () => {
+				removeAllVariables();
+			});
+		}
+
 		if (pausePlotBtn) {
 			pausePlotBtn.addEventListener('click', () => {
 				isPlotPaused = !isPlotPaused;
@@ -2739,6 +2850,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
 			const ansiRegex = new RegExp(pattern, 'g');
 			return text.replace(ansiRegex, '');
+		}
+
+		function safeRegExp(pattern, flags, context) {
+			try {
+				return new RegExp(pattern, flags);
+			} catch (e) {
+				const tag = context ? ' (' + context + ')' : '';
+				console.error('FancyMon: Invalid regex' + tag + ':', e, pattern);
+				return null;
+			}
 		}
 		
 		function applyFilter(entries, includePattern, excludePattern) {
@@ -3195,7 +3316,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					processLineForPlot(completeLine);
 				}
 			}
-			
+
 			// Trim old lines occasionally if we exceed max
 			// Only trim every 100 lines when over limit to avoid constant trimming
 			// This allows buffer to grow past maxLines and keeps usage display stable at 100%
