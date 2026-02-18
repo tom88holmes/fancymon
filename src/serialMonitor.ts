@@ -1,4 +1,4 @@
-﻿import * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
@@ -22,6 +22,8 @@ export interface SerialMonitorConfig {
 export class SerialMonitor {
 	public panel: vscode.WebviewPanel | null = null; // Made public for cleanup
 	private messageQueue: string[] = [];
+	private incomingLineBuffer = '';
+	private lineProcessingQueue: Promise<void> = Promise.resolve();
 	private readonly configKey = 'fancymon.lastConfig';
 	private readonly wrapStateKey = 'fancymon.lineWrapEnabled';
 	private readonly messageHistoryKey = 'fancymon.messageHistory';
@@ -37,8 +39,7 @@ export class SerialMonitor {
 		// Set up connection with callbacks
 		const callbacks: SerialConnectionCallbacks = {
 			onData: (data: string) => {
-				this.sendMessage({ command: 'data', data });
-				this.resolveAddresses(data);
+				this.handleIncomingData(data);
 			},
 			onError: (error: string) => {
 				this.sendMessage({ command: 'error', message: error });
@@ -499,8 +500,7 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 	}
 
 	public simulateData(data: string): void {
-		this.sendMessage({ command: 'data', data });
-		this.resolveAddresses(data);
+		this.handleIncomingData(data);
 	}
 
 	private async saveToFile(content: string): Promise<void> {
@@ -536,15 +536,36 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 	}
 
 	private sendMessage(message: any): void {
+		let payload = message;
+		if (typeof payload === 'string') {
+			try {
+				payload = JSON.parse(payload);
+			} catch (error) {
+				console.warn('FancyMon: Dropping invalid queued message:', error);
+				return;
+			}
+		}
+
 		if (this.panel) {
 			// Only log non-data messages to reduce console noise
-			if (message.command !== 'data') {
-				console.log('FancyMon: Sending message to webview:', message.command);
+			if (payload && payload.command !== 'data') {
+				console.log('FancyMon: Sending message to webview:', payload.command);
 			}
-			this.panel.webview.postMessage(message);
+			try {
+				const result = this.panel.webview.postMessage(payload);
+				if (result && typeof (result as Thenable<boolean>).then === 'function') {
+					(result as Thenable<boolean>).then(undefined, (error: unknown) => {
+						console.warn('FancyMon: Webview message rejected:', error);
+					});
+				}
+			} catch (error) {
+				console.warn('FancyMon: Webview not available, dropping message:', error);
+				this.panel = null;
+			}
 		} else {
-			console.log('FancyMon: Panel not ready, queuing message:', message.command);
-			this.messageQueue.push(JSON.stringify(message));
+			const commandLabel = payload && payload.command ? payload.command : 'unknown';
+			console.log('FancyMon: Panel not ready, queuing message:', commandLabel);
+			this.messageQueue.push(JSON.stringify(payload));
 		}
 	}
 
@@ -622,18 +643,43 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 		return null;
 	}
 
-	private async resolveAddresses(data: string): Promise<void> {
+	private handleIncomingData(data: string): void {
+		this.incomingLineBuffer += data;
+		const parts = this.incomingLineBuffer.split('\n');
+		this.incomingLineBuffer = parts.pop() || '';
+		for (const part of parts) {
+			this.queueLine(part + '\n');
+		}
+	}
+
+	private queueLine(line: string): void {
+		this.lineProcessingQueue = this.lineProcessingQueue
+			.then(() => this.processLine(line))
+			.catch((error) => {
+				console.error('FancyMon: Error processing line:', error);
+			});
+	}
+
+	private async processLine(line: string): Promise<void> {
+		this.sendMessage({ command: 'data', data: line });
+		const resolvedLines = await this.resolveAddressesForLine(line);
+		for (const resolvedLine of resolvedLines) {
+			this.sendMessage({ command: 'data', data: resolvedLine + '\n' });
+		}
+	}
+
+	private async resolveAddressesForLine(line: string): Promise<string[]> {
 		const elfFile = this.context.workspaceState.get<any>(this.elfFileKey);
 		if (!elfFile || !fs.existsSync(elfFile.path)) {
-			return;
+			return [];
 		}
 
 		// Regex for 8-digit hex addresses (0x40xxxxxx or 0x42xxxxxx or 0x3fxxxxxx)
 		const hexRegex = /0x[0-9a-fA-F]{8}/g;
-		const matches = data.match(hexRegex);
+		const matches = line.match(hexRegex);
 		
 		if (!matches || matches.length === 0) {
-			return;
+			return [];
 		}
 
 		// Filter unique addresses to avoid duplicate lookups in the same chunk
@@ -689,21 +735,21 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 
 		try {
 			const output = await tryRunAddr2Line(0);
-			if (output) {
-				this.processAddr2LineOutput(output);
-			}
+			return output ? this.formatAddr2LineOutput(output) : [];
 		} catch (e) {
 			console.error('FancyMon: Error resolving addresses:', e);
+			return [];
 		}
 	}
 
-	private processAddr2LineOutput(output: string): void {
+	private formatAddr2LineOutput(output: string): string[] {
 		// Output format with -a:
 		// 0xaddress
 		// function_name
 		// file_path:line
 		const lines = output.trim().split(/\r?\n/);
 		let i = 0;
+		const results: string[] = [];
 		while (i < lines.length) {
 			const addrLine = lines[i++].trim();
 			if (!addrLine.startsWith('0x')) {
@@ -727,11 +773,10 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 
 			// Format the output line
 			// --- 0x4037602e: panic_abort at C:/.../panic.c:466
-			const formattedLine = `--- ${addrLine}: ${funcName} at ${fileLine}`;
-			
-			// Send to webview
-			this.sendMessage({ command: 'data', data: formattedLine + '\n' });
+			const formattedLine = `\u001b[0m--- ${addrLine}: ${funcName} at ${fileLine}`;
+			results.push(formattedLine);
 		}
+		return results;
 	}
 
 	private getWebviewContent(): string {
