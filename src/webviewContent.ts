@@ -424,6 +424,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 			position: relative;
 		}
 
+		.file-line-link {
+			color: var(--vscode-textLink-foreground);
+			text-decoration: underline;
+			cursor: pointer;
+		}
+		.file-line-link:hover {
+			color: var(--vscode-textLink-activeForeground);
+		}
+
 		/* Context menu styling */
 		.context-menu {
 			position: fixed;
@@ -535,24 +544,37 @@ export function getWebviewContentHtml(cspSource: string): string {
 		.variables-list {
 			display: flex;
 			flex-wrap: wrap;
-			gap: 5px;
-			margin-top: 10px;
+			gap: 4px;
+			margin-top: 6px;
+			max-height: 80px;
+			overflow-y: auto;
 		}
 
 		.variable-item {
-			display: flex;
+			display: inline-flex;
 			align-items: center;
-			gap: 5px;
-			padding: 2px 8px;
+			gap: 4px;
+			padding: 2px 4px 2px 6px;
 			background-color: var(--vscode-input-background);
 			border: 1px solid var(--vscode-input-border);
-			border-radius: 2px;
-			flex: 0 1 auto;
+			border-radius: 3px;
+			font-size: 11px;
+			line-height: 1.2;
+			flex: 0 0 auto;
 		}
 
 		.variable-item .variable-name {
-			font-weight: bold;
+			font-weight: 600;
 			font-size: 11px;
+			max-width: 90px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.variable-group .variable-group-names {
+			max-width: 280px;
+			font-weight: 500;
 		}
 
 		.variable-item .variable-pattern {
@@ -563,9 +585,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		.variable-item .variable-count {
-			font-size: 11px;
+			font-size: 10px;
 			color: var(--vscode-descriptionForeground);
-			min-width: 60px;
+		}
+
+		.variable-item .variable-remove {
+			padding: 0 3px;
+			font-size: 14px;
+			line-height: 1;
+			min-width: 18px;
+			border: none;
+			background: none;
+			color: var(--vscode-foreground);
+			cursor: pointer;
+			border-radius: 2px;
+		}
+
+		.variable-item .variable-remove:hover {
+			background-color: var(--vscode-toolbar-hoverBackground);
 		}
 
 		.plot-container {
@@ -587,7 +624,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			top: 10px;
 			display: flex;
 			flex-direction: row;
-			gap: 15px;
+			flex-wrap: nowrap;
+			align-items: flex-start;
+			gap: 10px;
 			background-color: rgba(255, 255, 255, 0.9);
 			padding: 5px 10px;
 			border-radius: 3px;
@@ -597,18 +636,30 @@ export function getWebviewContentHtml(cspSource: string): string {
 			pointer-events: auto;
 		}
 
+		.legend-items {
+			display: grid;
+			grid-template-rows: repeat(5, auto);
+			grid-auto-flow: column;
+			grid-auto-columns: max-content;
+			gap: 2px 15px;
+			align-items: start;
+		}
+
 		.y1-legend {
 			left: 10px;
 		}
 
 		.y2-legend {
 			right: 280px;
-			display: grid !important;
-			grid-template-columns: repeat(2, auto);
-			grid-auto-flow: row;
-			gap: 5px 15px;
-			align-items: start;
-			flex-direction: unset;
+		}
+
+		.y1-legend .legend-items,
+		.y2-legend .legend-items {
+			display: grid;
+			grid-template-rows: repeat(5, auto);
+			grid-auto-flow: column;
+			grid-auto-columns: max-content;
+			gap: 2px 15px;
 		}
 
 		.y2-legend .custom-legend-item {
@@ -649,6 +700,29 @@ export function getWebviewContentHtml(cspSource: string): string {
 		.custom-legend-item span:not(.custom-legend-color) {
 			color: #000000;
 			font-weight: 500;
+		}
+
+		.legend-value {
+			color: #1a1a1a;
+			font-weight: 500;
+			min-width: 5.5ch;
+			display: inline-block;
+			text-align: right;
+		}
+
+		.legend-hide-all {
+			font-size: 10px;
+			padding: 2px 6px;
+			margin-right: 8px;
+			border: 1px solid var(--vscode-panel-border);
+			background: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-button-secondaryForeground);
+			border-radius: 2px;
+			cursor: pointer;
+		}
+
+		.legend-hide-all:hover {
+			background: var(--vscode-button-secondaryHoverBackground);
 		}
 	</style>
 </head>
@@ -715,6 +789,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 	</div>
 
 	<div class="controls-row">
+		<button id="pauseRunBtn" class="toggle active" title="Pause display (data still received, not shown)">Pause</button>
 		<button id="clearBtn">Clear</button>
 		<button id="toggleWrapBtn" class="toggle active" title="Toggle line wrapping">Wrap</button>
 		<div class="control-group">
@@ -802,6 +877,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<button id="clearPlotBtn">Clear Plot</button>
 				<button id="removeAllVariablesBtn">Remove All Variables</button>
 				<button id="pausePlotBtn">Pause</button>
+				<button id="testPlotDataBtn" title="Load 15 Y1 + 15 Y2 variables, 1000 points each">Load test data</button>
 			</div>
 			<div class="variables-list" id="variablesList">
 				<div style="font-size: 12px; color: var(--vscode-descriptionForeground); padding: 5px;">No variables added yet</div>
@@ -850,6 +926,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 		
 		let isConnected = false;
 		let isDisconnecting = false;
+		let isDisplayPaused = false;
+		let pauseStartTime = 0;
+		let runStartTime = Date.now();
+		let lineCountAtRunStart = 0;
+		let missedLineCount = 0;
 		let isFollowing = true; // Auto-scroll to bottom by default
 		let lastScrollTop = 0; // Track previous scroll position to detect scroll direction
 		const monitor = document.getElementById('monitor');
@@ -871,6 +952,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const parity = document.getElementById('parity');
 		const sendResetBtn = document.getElementById('sendResetBtn');
 		const connectToggleBtn = document.getElementById('connectToggleBtn');
+		const pauseRunBtn = document.getElementById('pauseRunBtn');
 		const clearBtn = document.getElementById('clearBtn');
 		const toggleWrapBtn = document.getElementById('toggleWrapBtn');
 		const sendInput = document.getElementById('sendInput');
@@ -979,6 +1061,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const clearPlotBtn = document.getElementById('clearPlotBtn');
 		const removeAllVariablesBtn = document.getElementById('removeAllVariablesBtn');
 		const pausePlotBtn = document.getElementById('pausePlotBtn');
+		const testPlotDataBtn = document.getElementById('testPlotDataBtn');
 		const variablesList = document.getElementById('variablesList');
 		const timePatternInput = document.getElementById('timePatternInput');
 		const plotDiv = document.getElementById('plotDiv');
@@ -1251,8 +1334,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 				setInputValuePreserveCaret(timePatternInput, pattern);
 			}
 			const mode = computeTimeAxisModeFromPattern(pattern);
-			const hoverTemplateRtc = '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>';
-			const hoverTemplateUptime = '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>';
 
 			// Update hint text
 			if (timePatternHint) {
@@ -1280,12 +1361,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 					'xaxis.title.text': xTitle,
 					'xaxis.type': xType,
 					'xaxis.tickformat': mode === 'rtc' ? '%H:%M:%S.%L' : null,
-					'xaxis.hoverformat': mode === 'rtc' ? '%Y-%m-%d %H:%M:%S.%L' : null
+					'xaxis.hoverformat': mode === 'rtc' ? '%Y-%m-%d %H:%M:%S.%L' : null,
+					'xaxis.showspikes': false,
+					'yaxis.showspikes': false,
+					'yaxis2.showspikes': false
 				});
 
-				// Keep hover formatting consistent with axis mode
+				// Keep native hover popup empty (values shown in custom legend)
 				Plotly.restyle(plotDiv, {
-					hovertemplate: mode === 'rtc' ? hoverTemplateRtc : hoverTemplateUptime
+					hovertemplate: '<extra></extra>',
+					hoverinfo: 'none'
 				});
 			}
 		}
@@ -1323,6 +1408,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 		});
 
+		// Format number for legend hover (compact: 165147 -> "165.1k")
+		function formatPlotNumber(n) {
+			if (n === 0) return '0';
+			const a = Math.abs(n);
+			if (a >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+			if (a >= 1e3) return (n / 1e3).toFixed(2).replace(/\.?0+$/, '') + 'k';
+			if (a < 1 && a > 0) return n.toFixed(4);
+			return n.toFixed(2).replace(/\.?0+$/, '') || String(n);
+		}
+
 		// Initialize Plotly.js
 		function initializeChart() {
 			if (!plotDiv || typeof Plotly === 'undefined') {
@@ -1336,9 +1431,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const xAxisType = axisMode === 'rtc' ? 'date' : 'linear';
 			const xTickFormat = axisMode === 'rtc' ? '%H:%M:%S.%L' : undefined;
 			const xHoverFormat = axisMode === 'rtc' ? '%Y-%m-%d %H:%M:%S.%L' : undefined;
-			const hoverTemplate = axisMode === 'rtc'
-				? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
-				: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>';
+			// Empty hovertemplate so native popup is not shown; values appear in custom legend on hover
+			const hoverTemplateEmpty = '<extra></extra>';
 
 			// Prepare data traces from existing variables
 			const traces = plotVariables.map(variable => ({
@@ -1347,15 +1441,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 				name: variable.name,
 				yaxis: variable.axis === 'y2' ? 'y2' : 'y',
 				legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
-				// Hide all traces from Plotly's native legend (using custom legends)
 				showlegend: false,
+				visible: variable.visible !== false,
 				type: 'scatter',
 				mode: 'lines',
 				line: {
 					color: variable.color,
 					width: 2
 				},
-				hovertemplate: hoverTemplate
+				hovertemplate: hoverTemplateEmpty,
+				// No native tooltip (values shown in custom legend); hover events still fire for legend
+				hoverinfo: 'none'
 			}));
 
 			const layout = {
@@ -1377,7 +1473,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					hoverformat: xHoverFormat,
 					gridcolor: 'var(--vscode-panel-border)',
 					zerolinecolor: 'var(--vscode-panel-border)',
-					color: 'var(--vscode-foreground)'
+					color: 'var(--vscode-foreground)',
+					showspikes: false
 				},
 				yaxis: {
 					title: {
@@ -1388,7 +1485,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					},
 					gridcolor: 'var(--vscode-panel-border)',
 					zerolinecolor: 'var(--vscode-panel-border)',
-					color: 'var(--vscode-foreground)'
+					color: 'var(--vscode-foreground)',
+					showspikes: false
 				},
 				yaxis2: {
 					title: {
@@ -1402,7 +1500,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					zerolinecolor: 'transparent',
 					color: 'var(--vscode-foreground)',
 					overlaying: 'y',
-					side: 'right'
+					side: 'right',
+					showspikes: false
 				},
 				plot_bgcolor: 'var(--vscode-textCodeBlock-background)',
 				paper_bgcolor: 'var(--vscode-textCodeBlock-background)',
@@ -1412,7 +1511,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 				// Hide Plotly's native legend (using custom HTML legends)
 				showlegend: false,
 				margin: { l: 60, r: 60, t: 80, b: 50 },
-				hovermode: 'x unified'
+				hovermode: 'x unified',
+				// Values shown in custom legend on hover; keep default tooltip minimal
+				hoverlabel: { bgcolor: 'transparent', bordercolor: 'transparent', font: { size: 0 }, namelength: 0 }
 			};
 
 			const config = {
@@ -1431,6 +1532,28 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 			Plotly.newPlot(plotDiv, traces, layout, config);
 			plotInitialized = true;
+
+			// Show hovered x values in legend area (fixed-width so columns don't jump)
+			plotDiv.on('plotly_hover', (eventData) => {
+				if (!eventData || !eventData.points || eventData.points.length === 0) return;
+				const points = eventData.points;
+				document.querySelectorAll('.custom-legend-item').forEach((item) => {
+					const variableId = item.dataset.variableId;
+					const variable = plotVariables.find(v => v.id === variableId);
+					if (!variable) return;
+					const pt = points.find(p => (p.fullData && p.fullData.name === variable.name) || (p.data && p.data.name === variable.name));
+					const valueSpan = item.querySelector('.legend-value');
+					if (valueSpan) {
+						const y = pt != null && (typeof pt.y === 'number' || (typeof pt.y === 'string' && !isNaN(parseFloat(pt.y)))) ? Number(pt.y) : NaN;
+						valueSpan.textContent = !isNaN(y) ? formatPlotNumber(y) : '\u2014';
+					}
+				});
+			});
+			plotDiv.on('plotly_unhover', () => {
+				document.querySelectorAll('.legend-value').forEach(span => {
+					span.textContent = '\u2014';
+				});
+			});
 
 			// Handle resize
 			const resizeObserver = new ResizeObserver(() => {
@@ -2091,7 +2214,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					data: [],
 					color: color,
 					axis: axisKey,
-					matchFromTimeToken: matchFromTimeToken
+					matchFromTimeToken: matchFromTimeToken,
+					visible: true
 				};
 
 				plotVariables.push(variable);
@@ -2107,17 +2231,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 						name: variable.name,
 						yaxis: axisKey === 'y2' ? 'y2' : 'y',
 						legendgroup: axisKey === 'y2' ? 'y2' : 'y1',
-						// Hide all traces from Plotly's native legend (using custom legends)
 						showlegend: false,
+						visible: variable.visible !== false,
 						type: 'scatter',
 						mode: 'lines',
 						line: {
 							color: color,
 							width: 2
 						},
-						hovertemplate: currentTimeAxisMode === 'rtc'
-							? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
-							: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+						hovertemplate: '<extra></extra>',
+						hoverinfo: 'none'
 					};
 					Plotly.addTraces(plotDiv, newTrace);
 				}
@@ -2190,7 +2313,34 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return getNextColorForAxis(axis, disallowed);
 		}
 
-		// Update variables list UI
+		// Group variables by pattern (one row per regex/line match)
+		function getVariablesByPattern() {
+			const byPattern = new Map();
+			plotVariables.forEach(v => {
+				const key = v.pattern || '';
+				if (!byPattern.has(key)) byPattern.set(key, []);
+				byPattern.get(key).push(v);
+			});
+			return byPattern;
+		}
+
+		function removeVariableGroup(pattern) {
+			const indices = [];
+			plotVariables.forEach((v, i) => { if (v.pattern === pattern) indices.push(i); });
+			if (indices.length === 0) return;
+			// Remove from plotVariables in descending index order so indices stay valid
+			indices.sort((a, b) => b - a);
+			indices.forEach(i => plotVariables.splice(i, 1));
+			if (plotInitialized && plotDiv && indices.length > 0) {
+				Plotly.deleteTraces(plotDiv, indices);
+			}
+			updateVariablesList();
+			updateY1Legend();
+			updateY2Legend();
+			saveCurrentSession();
+		}
+
+		// Update variables list UI (grouped by pattern: one row per group, lists all series, one point count, one ×)
 		function updateVariablesList() {
 			if (!variablesList) return;
 
@@ -2200,33 +2350,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 
 			variablesList.innerHTML = '';
-			plotVariables.forEach(variable => {
+			const byPattern = getVariablesByPattern();
+			byPattern.forEach((vars, pattern) => {
 				const item = document.createElement('div');
-				item.className = 'variable-item';
+				item.className = 'variable-item variable-group';
+				
+				const namesList = vars.map(v => v.name + (v.axis === 'y2' ? ' (Y2)' : ' (Y1)')).join(', ');
+				const ptCount = vars.length > 0 ? vars[0].data.length : 0;
 				
 				const nameSpan = document.createElement('span');
-				nameSpan.className = 'variable-name';
-				nameSpan.textContent = variable.name + (variable.axis === 'y2' ? ' (Y2)' : ' (Y1)');
-				nameSpan.style.color = variable.color;
-				
-				// Don't show pattern - too long
-				// const patternSpan = document.createElement('span');
-				// patternSpan.className = 'variable-pattern';
-				// patternSpan.textContent = variable.pattern;
+				nameSpan.className = 'variable-name variable-group-names';
+				nameSpan.textContent = namesList;
+				nameSpan.title = namesList;
 				
 				const countSpan = document.createElement('span');
 				countSpan.className = 'variable-count';
-				countSpan.textContent = variable.data.length + ' points';
+				countSpan.textContent = ptCount + ' pts';
 				
 				const removeBtn = document.createElement('button');
-				removeBtn.textContent = 'Remove';
-				removeBtn.style.fontSize = '11px';
-				removeBtn.addEventListener('click', () => {
-					removeVariable(variable.id);
+				removeBtn.className = 'variable-remove';
+				removeBtn.textContent = '×';
+				removeBtn.title = 'Remove all ' + vars.length + ' series from this pattern';
+				removeBtn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					removeVariableGroup(pattern);
 				});
 				
 				item.appendChild(nameSpan);
-				// item.appendChild(patternSpan);
 				item.appendChild(countSpan);
 				item.appendChild(removeBtn);
 				variablesList.appendChild(item);
@@ -2252,9 +2402,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 			y1Legend.style.display = 'block';
 			y1Legend.innerHTML = '';
 			
+			const y1AllHidden = y1Variables.every(v => v.visible === false);
+			const y1ToggleBtn = document.createElement('button');
+			y1ToggleBtn.className = 'legend-hide-all';
+			y1ToggleBtn.textContent = y1AllHidden ? 'Show all Y1' : 'Hide all Y1';
+			y1ToggleBtn.title = y1AllHidden ? 'Show all series on Y1 axis' : 'Deselect all series on Y1 axis';
+			y1ToggleBtn.addEventListener('click', () => {
+				if (!plotInitialized || !plotDiv) return;
+				const indices = [];
+				y1Variables.forEach((v) => {
+					const idx = plotVariables.findIndex(pv => pv.id === v.id);
+					if (idx >= 0) {
+						indices.push(idx);
+						v.visible = y1AllHidden;
+					}
+				});
+				if (indices.length > 0) {
+					Plotly.restyle(plotDiv, { visible: y1AllHidden ? true : 'legendonly' }, indices);
+					updateY1Legend();
+				}
+			});
+			y1Legend.appendChild(y1ToggleBtn);
+			const y1Items = document.createElement('div');
+			y1Items.className = 'legend-items';
+			
 			y1Variables.forEach((variable) => {
 				const item = document.createElement('div');
-				item.className = 'custom-legend-item';
+				item.className = 'custom-legend-item' + (variable.visible === false ? ' hidden' : '');
 				item.dataset.variableId = variable.id;
 				
 				const colorBox = document.createElement('span');
@@ -2262,25 +2436,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 				colorBox.style.backgroundColor = variable.color;
 				
 				const nameSpan = document.createElement('span');
-				nameSpan.textContent = variable.name;
+				nameSpan.textContent = variable.name + ': ';
+				nameSpan.className = 'legend-name';
+				
+				const valueSpan = document.createElement('span');
+				valueSpan.className = 'legend-value';
+				valueSpan.textContent = '\u2014';
+				valueSpan.style.marginLeft = '2px';
 				
 				item.appendChild(colorBox);
 				item.appendChild(nameSpan);
+				item.appendChild(valueSpan);
 				
 				// Click to toggle visibility
 				item.addEventListener('click', () => {
 					if (plotInitialized && plotDiv) {
 						const traceIndex = plotVariables.findIndex(v => v.id === variable.id);
 						if (traceIndex >= 0) {
-							const isHidden = item.classList.contains('hidden');
-							Plotly.restyle(plotDiv, { visible: isHidden ? true : 'legendonly' }, [traceIndex]);
+							variable.visible = !variable.visible;
+							Plotly.restyle(plotDiv, { visible: variable.visible ? true : 'legendonly' }, [traceIndex]);
 							item.classList.toggle('hidden');
 						}
 					}
 				});
 				
-				y1Legend.appendChild(item);
+				y1Items.appendChild(item);
 			});
+			y1Legend.appendChild(y1Items);
 		}
 		
 		// Update custom Y2 legend (right side)
@@ -2298,9 +2480,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 			y2Legend.style.display = 'block';
 			y2Legend.innerHTML = '';
 			
+			const y2AllHidden = y2Variables.every(v => v.visible === false);
+			const y2ToggleBtn = document.createElement('button');
+			y2ToggleBtn.className = 'legend-hide-all';
+			y2ToggleBtn.textContent = y2AllHidden ? 'Show all Y2' : 'Hide all Y2';
+			y2ToggleBtn.title = y2AllHidden ? 'Show all series on Y2 axis' : 'Deselect all series on Y2 axis';
+			y2ToggleBtn.addEventListener('click', () => {
+				if (!plotInitialized || !plotDiv) return;
+				const indices = [];
+				y2Variables.forEach((v) => {
+					const idx = plotVariables.findIndex(pv => pv.id === v.id);
+					if (idx >= 0) {
+						indices.push(idx);
+						v.visible = y2AllHidden;
+					}
+				});
+				if (indices.length > 0) {
+					Plotly.restyle(plotDiv, { visible: y2AllHidden ? true : 'legendonly' }, indices);
+					updateY2Legend();
+				}
+			});
+			y2Legend.appendChild(y2ToggleBtn);
+			const y2Items = document.createElement('div');
+			y2Items.className = 'legend-items';
+			
 			y2Variables.forEach((variable) => {
 				const item = document.createElement('div');
-				item.className = 'custom-legend-item';
+				item.className = 'custom-legend-item' + (variable.visible === false ? ' hidden' : '');
 				item.dataset.variableId = variable.id;
 				
 				const colorBox = document.createElement('span');
@@ -2308,25 +2514,33 @@ export function getWebviewContentHtml(cspSource: string): string {
 				colorBox.style.backgroundColor = variable.color;
 				
 				const nameSpan = document.createElement('span');
-				nameSpan.textContent = variable.name;
+				nameSpan.textContent = variable.name + ': ';
+				nameSpan.className = 'legend-name';
+				
+				const valueSpan = document.createElement('span');
+				valueSpan.className = 'legend-value';
+				valueSpan.textContent = '\u2014';
+				valueSpan.style.marginLeft = '2px';
 				
 				item.appendChild(colorBox);
 				item.appendChild(nameSpan);
+				item.appendChild(valueSpan);
 				
 				// Click to toggle visibility
 				item.addEventListener('click', () => {
 					if (plotInitialized && plotDiv) {
 						const traceIndex = plotVariables.findIndex(v => v.id === variable.id);
 						if (traceIndex >= 0) {
-							const isHidden = item.classList.contains('hidden');
-							Plotly.restyle(plotDiv, { visible: isHidden ? true : 'legendonly' }, [traceIndex]);
+							variable.visible = !variable.visible;
+							Plotly.restyle(plotDiv, { visible: variable.visible ? true : 'legendonly' }, [traceIndex]);
 							item.classList.toggle('hidden');
 						}
 					}
 				});
 				
-				y2Legend.appendChild(item);
+				y2Items.appendChild(item);
 			});
+			y2Legend.appendChild(y2Items);
 		}
 
 		// Remove variable
@@ -2360,6 +2574,87 @@ export function getWebviewContentHtml(cspSource: string): string {
 			updateVariablesList();
 			updateY1Legend();
 			updateY2Legend();
+			saveCurrentSession();
+		}
+
+		function loadTestPlotData() {
+			const TEST_POINTS = 1000;
+			const Y1_COUNT = 15;
+			const Y2_COUNT = 15;
+			const dummyPattern = '(\\d+)';
+			let dummyRegex = null;
+			try {
+				dummyRegex = new RegExp(dummyPattern);
+			} catch (e) {
+				dummyRegex = /(\d+)/;
+			}
+
+			removeAllVariables();
+
+			const usedY1Colors = new Set();
+			const usedY2Colors = new Set();
+
+			for (let i = 0; i < Y1_COUNT; i++) {
+				const name = 'test_Y1_' + (i + 1);
+				const color = getNextColorForAxis('y', usedY1Colors);
+				usedY1Colors.add(color);
+				const data = [];
+				for (let p = 0; p < TEST_POINTS; p++) {
+					const t = p * 1000;
+					const value = (i + 1) * 3000 + Math.sin(p / 50) * 15000 + p * 20 + (p % 7) * 500;
+					data.push({ time: t, value: value });
+				}
+				plotVariables.push({
+					id: 'test-y1-' + (i + 1),
+					name: name,
+					pattern: dummyPattern,
+					regex: dummyRegex,
+					captureIndex: 1,
+					keyName: null,
+					keyRegex: null,
+					data: data,
+					color: color,
+					axis: 'y',
+					matchFromTimeToken: false,
+					visible: true
+				});
+			}
+
+			for (let i = 0; i < Y2_COUNT; i++) {
+				const name = 'test_Y2_' + (i + 1);
+				const color = getNextColorForAxis('y2', usedY2Colors);
+				usedY2Colors.add(color);
+				const data = [];
+				for (let p = 0; p < TEST_POINTS; p++) {
+					const t = p * 1000;
+					const value = (i + 1) * 800 + Math.cos(p / 40) * 8000 + (p % 11) * 200;
+					data.push({ time: t, value: value });
+				}
+				plotVariables.push({
+					id: 'test-y2-' + (i + 1),
+					name: name,
+					pattern: dummyPattern,
+					regex: dummyRegex,
+					captureIndex: 1,
+					keyName: null,
+					keyRegex: null,
+					data: data,
+					color: color,
+					axis: 'y2',
+					matchFromTimeToken: false,
+					visible: true
+				});
+			}
+
+			// Use uptime (linear) X-axis for test data so it displays as CPU Uptime (ms)
+			if (timePatternInput) {
+				timePatternInput.value = '\\(([0-9]+)\\)';
+				updateTimePatternHintAndAxis();
+			}
+			if (plotDiv && typeof Plotly !== 'undefined') {
+				initializeChart();
+			}
+			updateVariablesList();
 			saveCurrentSession();
 		}
 
@@ -2500,7 +2795,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 								data: [],
 								color: color,
 								axis: axisKey,
-								matchFromTimeToken: timeEnd > 0
+								matchFromTimeToken: timeEnd > 0,
+								visible: true
 							};
 							
 							plotVariables.push(variable);
@@ -2516,15 +2812,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 									yaxis: variable.axis === 'y2' ? 'y2' : 'y',
 									legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
 									showlegend: false,
+									visible: variable.visible !== false,
 									type: 'scatter',
 									mode: 'lines',
 									line: {
 										color: variable.color,
 										width: 2
 									},
-									hovertemplate: currentTimeAxisMode === 'rtc'
-										? '<b>%{fullData.name}</b><br>Time: %{x|%Y-%m-%d %H:%M:%S.%L}<br>Value: %{y}<extra></extra>'
-										: '<b>%{fullData.name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>'
+									hovertemplate: '<extra></extra>',
+									hoverinfo: 'none'
 								};
 								Plotly.addTraces(plotDiv, newTrace);
 							}
@@ -2838,6 +3134,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 		}
 
+		if (testPlotDataBtn) {
+			testPlotDataBtn.addEventListener('click', () => {
+				loadTestPlotData();
+			});
+		}
+
 		if (pausePlotBtn) {
 			pausePlotBtn.addEventListener('click', () => {
 				isPlotPaused = !isPlotPaused;
@@ -2976,6 +3278,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 				.replace(new RegExp('\\r', 'g'), '&#13;')
 				.replace(new RegExp('\\n', 'g'), '&#10;')
 				.replace(new RegExp('\\t', 'g'), '&#9;');
+		}
+
+		// Turn file:line patterns (e.g. tmImageCache.c:233) into clickable links that open in the editor
+		function linkifyFileLineRefs(html) {
+			if (!html || typeof html !== 'string') return html;
+			// Match path-like segments with common source extensions followed by :digits (path may contain / \ . - _ alphanumeric)
+			const fileLineRegex = /([a-zA-Z0-9_./\\\\-]+\\.(?:c|cpp|h|hpp|hxx|cxx|cc|ts|tsx|js|jsx|py|rs|go|java|kt|swift|m|mm|s|S)):(\\d+)/g;
+			return html.replace(fileLineRegex, (full, filePath, lineNum) => {
+				return '<a href="#" class="file-line-link" data-path="' + escapeHtmlAttribute(filePath) + '" data-line="' + lineNum + '">' + escapeHtml(full) + '</a>';
+			});
 		}
 
 		function getAnsiClasses(state) {
@@ -3430,7 +3742,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				
 				// Build HTML string directly (much faster than DOM operations)
 				html += '<div class="line" data-line="' + (totalTrimmedLines + idx + 1) + '" data-text="' + escapedPlainText + '">' + 
-					result.html + 
+					linkifyFileLineRefs(result.html) + 
 					'</div>';
 				
 				state = result.finalState;
@@ -3493,7 +3805,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const result = parseAnsi(textForDisplay, currentAnsiState);
 			const bufferDiv = document.createElement('div');
 			bufferDiv.className = 'line line-buffer';
-			bufferDiv.innerHTML = result.html;
+			bufferDiv.innerHTML = linkifyFileLineRefs(result.html);
 			monitor.appendChild(bufferDiv);
 			currentAnsiState = result.finalState;
 			
@@ -3575,7 +3887,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const result = parseAnsi(textForDisplay, state);
 				const plainText = stripAnsiCodes(textForDisplay);
 				if (entry.lineNumber !== null && entry.lineNumber !== undefined) {
-					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtmlAttribute(plainText) + '">' + result.html + '</div>';
+					html += '<div class="line" data-line="' + entry.lineNumber + '" data-text="' + escapeHtmlAttribute(plainText) + '">' + linkifyFileLineRefs(result.html) + '</div>';
 				} else {
 					html += '<div class="line line-buffer">' + result.html + '</div>';
 				}
@@ -3833,6 +4145,20 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 			}
 			
+			// Handle click on file:line links (e.g. tmImageCache.c:233) to open in editor
+			monitor.addEventListener('click', (e) => {
+				const link = e.target.closest('.file-line-link');
+				if (link && link.dataset.path && link.dataset.line !== undefined) {
+					e.preventDefault();
+					e.stopPropagation();
+					vscode.postMessage({
+						command: 'openFile',
+						path: link.dataset.path,
+						line: parseInt(link.dataset.line, 10)
+					});
+				}
+			});
+
 			// Handle right-click on lines
 			monitor.addEventListener('contextmenu', (e) => {
 				// Find the closest .line element
@@ -3924,11 +4250,55 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 		});
 
+		function formatTimestamp() {
+			const now = new Date();
+			const hours = String(now.getHours()).padStart(2, '0');
+			const minutes = String(now.getMinutes()).padStart(2, '0');
+			const seconds = String(now.getSeconds()).padStart(2, '0');
+			const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+			return hours + ':' + minutes + ':' + seconds + '.' + milliseconds;
+		}
+		function formatDuration(ms) {
+			const sec = Math.floor(ms / 1000) % 60;
+			const min = Math.floor(ms / 60000) % 60;
+			const hour = Math.floor(ms / 3600000);
+			if (hour > 0) return hour + 'h ' + min + 'min ' + sec + 's';
+			if (min > 0) return min + 'min ' + sec + 's';
+			return sec + 's';
+		}
+
+		if (pauseRunBtn) {
+			pauseRunBtn.addEventListener('click', () => {
+				isDisplayPaused = !isDisplayPaused;
+				if (isDisplayPaused) {
+					const elapsed = Date.now() - runStartTime;
+					const linesLogged = lineCount - lineCountAtRunStart;
+					pauseStartTime = Date.now();
+					appendData('[' + formatTimestamp() + '] [[ PAUSED after ' + formatDuration(elapsed) + ' - LOGGED ' + linesLogged.toLocaleString() + ' LINES ]]' + String.fromCharCode(10));
+					pauseRunBtn.textContent = 'Run';
+					pauseRunBtn.classList.remove('active');
+					pauseRunBtn.title = 'Resume displaying new data';
+				} else {
+					const missed = missedLineCount;
+					runStartTime = Date.now();
+					lineCountAtRunStart = lineCount;
+					missedLineCount = 0;
+					appendData('[' + formatTimestamp() + '] [[ RESUMED after ' + formatDuration(Date.now() - pauseStartTime) + ' - MISSED ' + missed.toLocaleString() + ' LINES ]]' + String.fromCharCode(10));
+					pauseRunBtn.textContent = 'Pause';
+					pauseRunBtn.classList.add('active');
+					pauseRunBtn.title = 'Pause display (data still received, not shown)';
+				}
+			});
+		}
+
 		clearBtn.addEventListener('click', () => {
 			rawLines = [];
 			lineBuffer = '';
 			lineCount = 0;
 			totalTrimmedLines = 0;
+			runStartTime = Date.now();
+			lineCountAtRunStart = 0;
+			missedLineCount = 0;
 			currentAnsiState = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
 			monitor.innerHTML = '';
 			lastScrollTop = 0;
@@ -5058,9 +5428,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 						message.data.includes('[[ RESET SENT TO DEVICE ]]')
 					);
 					
-					// Process data if not disconnecting, OR if it's a status message
-					if (!isDisconnecting || isStatusMessage) {
+					// Process data if not disconnecting and not paused, OR if it's a status message
+					if ((!isDisconnecting && !isDisplayPaused) || isStatusMessage) {
 						appendData(message.data);
+					} else if (isDisplayPaused) {
+						// Count complete lines missed while paused (for RESUMED message)
+						// Use RegExp constructor: regex literal with backslash-n in template would break the script
+						const newlines = (message.data && message.data.match(new RegExp('\\n', 'g'))) || [];
+						missedLineCount += newlines.length;
 					} else {
 						console.log('FancyMon: Ignoring data - disconnecting');
 					}

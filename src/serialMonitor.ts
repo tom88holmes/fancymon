@@ -303,6 +303,47 @@ export class SerialMonitor {
 						});
 						break;
 
+					case 'openFile':
+						// Open file at line (e.g. from clickable tmImageCache.c:233 in log)
+						{
+							const filePath = message.path as string;
+							const lineNum = typeof message.line === 'number' ? message.line : parseInt(String(message.line), 10);
+							if (!filePath || isNaN(lineNum) || lineNum < 1) break;
+							const zeroBasedLine = lineNum - 1;
+							const isAbsolute = /^[A-Za-z]:[/\\]/.test(filePath) || filePath.startsWith('/');
+							(async () => {
+								let uri: vscode.Uri;
+								if (isAbsolute) {
+									uri = vscode.Uri.file(path.normalize(filePath));
+								} else {
+									const normalized = filePath.replace(/\\/g, '/');
+									const candidates = await vscode.workspace.findFiles('**/' + normalized, null, 1);
+									if (!candidates.length) {
+										// Fallback: search by basename only
+										const base = path.basename(filePath);
+										const byName = await vscode.workspace.findFiles('**/' + base, null, 5);
+										if (byName.length) {
+											uri = byName[0];
+										} else {
+											const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+											uri = root ? vscode.Uri.file(path.join(root, filePath)) : vscode.Uri.file(path.normalize(filePath));
+										}
+									} else {
+										uri = candidates[0];
+									}
+								}
+								const doc = await vscode.workspace.openTextDocument(uri);
+								await vscode.window.showTextDocument(doc, {
+									selection: new vscode.Range(zeroBasedLine, 0, zeroBasedLine, 0),
+									preview: false
+								});
+							})().catch(err => {
+								console.error('FancyMon: openFile failed', err);
+								this.sendMessage({ command: 'error', message: `Could not open ${filePath}: ${err?.message || err}` });
+							});
+						}
+						break;
+
 					case 'testBacktrace':
 						const testData = `I [2025-11-26 00:01:47.769](61403) SYSTEM:               [1:          sleep] ending put_playback_manager_to_sleep
 I [2025-11-26 00:01:47.770](61404) BATT:                 [1:          sleep] Starting battery read sleep
