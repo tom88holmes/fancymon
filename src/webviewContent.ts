@@ -163,55 +163,82 @@ export function getWebviewContentHtml(cspSource: string): string {
 			flex: 1 1 auto;
 			min-height: 0;
 			min-width: 0;
+			display: flex;
+			flex-direction: row;
 			background-color: var(--vscode-textCodeBlock-background);
 			border: 1px solid var(--vscode-panel-border);
 			border-radius: 2px;
 			padding: 10px;
-			overflow-y: auto;
-			overflow-x: auto;
+			overflow: hidden;
+			position: relative;
 			font-family: 'Courier New', monospace;
 			font-size: 13px;
 			line-height: 1.4;
 			white-space: pre-wrap;
 			word-wrap: break-word;
-			position: relative;
 		}
-		
-		/* Custom scrollbar styling */
-		.monitor::-webkit-scrollbar {
-			width: 12px;
+		.monitor-scroll-wrap {
+			flex: 1 1 auto;
+			min-width: 0;
+			min-height: 0;
+			overflow-y: auto;
+			overflow-x: auto;
+			padding: 10px 0 10px 10px;
+			box-sizing: border-box;
 		}
-		
-		.monitor::-webkit-scrollbar-track {
+		/* Hide only vertical scrollbar (custom one used); keep horizontal visible */
+		.monitor-scroll-wrap::-webkit-scrollbar {
+			width: 0;
+			height: 12px;
+		}
+		.monitor-scroll-wrap::-webkit-scrollbar-track {
 			background: var(--vscode-scrollbarSlider-background);
-			border-radius: 6px;
 		}
-		
-		.monitor::-webkit-scrollbar-thumb {
+		.monitor-scroll-wrap::-webkit-scrollbar-thumb {
 			background: var(--vscode-scrollbarSlider-activeBackground);
 			border-radius: 6px;
 		}
-		
-		.monitor::-webkit-scrollbar-thumb:hover {
+		.monitor-scroll-wrap::-webkit-scrollbar-thumb:hover {
 			background: var(--vscode-scrollbarSlider-hoverBackground);
 		}
-		
-		/* Scrollbar indicator for frozen position */
-		.scrollbar-indicator {
-			position: absolute;
-			right: 0;
+		.monitor-custom-scrollbar {
+			flex: 0 0 12px;
 			width: 12px;
-			background-color: var(--vscode-textLink-foreground);
-			opacity: 0.8;
-			pointer-events: none;
-			z-index: 100;
-			display: none;
-			border-radius: 2px;
-			box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+			position: relative;
+			overflow: hidden;
+			background: var(--vscode-scrollbarSlider-background);
+			border-radius: 6px;
 		}
-		
-		.monitor.frozen .scrollbar-indicator {
-			display: block;
+		.monitor-custom-scrollbar .scrollbar-event-ruler {
+			position: absolute;
+			left: 0;
+			width: 100%;
+			background: transparent;
+			pointer-events: none;
+		}
+		.monitor-custom-scrollbar .scrollbar-event-mark {
+			position: absolute;
+			left: 0;
+			width: 100%;
+			height: 2px;
+			background: #9ca3af;
+			pointer-events: none;
+		}
+		.monitor-custom-scrollbar .scrollbar-thumb {
+			position: absolute;
+			left: 0;
+			width: 100%;
+			background: var(--vscode-scrollbarSlider-activeBackground);
+			border-radius: 6px;
+			cursor: pointer;
+			min-height: 20px;
+		}
+		.monitor-custom-scrollbar .scrollbar-thumb:hover {
+			background: var(--vscode-scrollbarSlider-hoverBackground);
+		}
+		/* Scrollbar indicator for frozen position - hidden (was pale blue line) */
+		.monitor-custom-scrollbar .scrollbar-indicator {
+			display: none !important;
 		}
 
 		.line {
@@ -828,7 +855,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 	</div>
 
 	<div class="monitor" id="monitor">
-		<div class="scrollbar-indicator" id="scrollbarIndicator"></div>
+		<div class="monitor-scroll-wrap" id="monitorScrollWrap">
+			<div id="monitorContent"></div>
+		</div>
+		<div class="monitor-custom-scrollbar" id="monitorCustomScrollbar">
+			<div class="scrollbar-event-ruler" id="scrollbarEventRuler"></div>
+			<div class="scrollbar-thumb" id="monitorScrollThumb"></div>
+			<div class="scrollbar-indicator" id="scrollbarIndicator"></div>
+		</div>
 	</div>
 
 	<div class="send-area">
@@ -934,6 +968,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let isFollowing = true; // Auto-scroll to bottom by default
 		let lastScrollTop = 0; // Track previous scroll position to detect scroll direction
 		const monitor = document.getElementById('monitor');
+		const monitorScrollWrap = document.getElementById('monitorScrollWrap');
+		const monitorContent = document.getElementById('monitorContent');
 		const portSelect = document.getElementById('portSelect');
 		
 		console.log('FancyMon: Elements found - monitor:', monitor, 'portSelect:', portSelect);
@@ -982,6 +1018,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let maxLines = 10000;
 		let lineCount = 0;
 		let totalTrimmedLines = 0;
+		/** Line numbers (1-based) where connect/disconnect/pause/resume (and reset) events appear in the log */
+		let eventLineNumbers = [];
 		let isFrozenView = false;
 		
 		// Message history (most recent first, max 30 items)
@@ -3408,7 +3446,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const linesThreshold = 10;
 			const pixelThreshold = lineHeight * linesThreshold;
 			
-			const distanceFromBottom = monitor.scrollHeight - monitor.scrollTop - monitor.clientHeight;
+			const distanceFromBottom = monitorScrollWrap.scrollHeight - monitorScrollWrap.scrollTop - monitorScrollWrap.clientHeight;
 			return distanceFromBottom <= pixelThreshold;
 		}
 
@@ -3455,8 +3493,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Calculate position as percentage of scroll height
-			const scrollHeight = monitor.scrollHeight;
-			const clientHeight = monitor.clientHeight;
+			const scrollHeight = monitorScrollWrap.scrollHeight;
+			const clientHeight = monitorScrollWrap.clientHeight;
 			if (scrollHeight <= clientHeight) {
 				scrollbarIndicator.style.display = 'none';
 				monitor.classList.remove('frozen');
@@ -3474,7 +3512,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			scrollbarIndicator.style.top = top + 'px';
 			scrollbarIndicator.style.height = indicatorHeight + 'px';
-			scrollbarIndicator.style.display = 'block';
+			// Indicator hidden per user preference (was pale blue line)
 			
 			// Add frozen class to show indicator
 			if (!monitor.classList.contains('frozen')) {
@@ -3486,7 +3524,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (!monitor) {
 				return;
 			}
-			const anchorInfo = getAnchorLineInfo(monitor.scrollTop);
+			const anchorInfo = getAnchorLineInfo(monitorScrollWrap.scrollTop);
 			if (anchorInfo) {
 				frozenAnchorLine = anchorInfo.line;
 				frozenAnchorOffset = anchorInfo.offset;
@@ -3510,6 +3548,50 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 		}
 
+		function updateScrollbarEventMarks() {
+			const ruler = document.getElementById('scrollbarEventRuler');
+			const track = document.getElementById('monitorCustomScrollbar');
+			if (!monitor || !ruler || !track || !monitorScrollWrap) return;
+			if (rawLines.length === 0) return;
+			// Ruler = fixed height of the track (viewport). Marks are at % of full log, so they stay fixed on the scrollbar.
+			const trackHeight = monitorScrollWrap.clientHeight;
+			ruler.style.height = trackHeight + 'px';
+			ruler.style.top = '0';
+			const visible = eventLineNumbers.filter(function (E) {
+				return E > totalTrimmedLines && E <= totalTrimmedLines + rawLines.length;
+			});
+			ruler.innerHTML = '';
+			// Each mark at % of track = position in entire log (0% = top of log, 100% = bottom)
+			for (let i = 0; i < visible.length; i++) {
+				const E = visible[i];
+				const topPercent = ((E - totalTrimmedLines - 1) / rawLines.length) * 100;
+				const mark = document.createElement('div');
+				mark.className = 'scrollbar-event-mark';
+				mark.style.top = topPercent + '%';
+				mark.style.background = '#9ca3af';
+				ruler.appendChild(mark);
+			}
+			updateScrollThumb();
+		}
+
+		function updateScrollThumb() {
+			const track = document.getElementById('monitorCustomScrollbar');
+			const thumb = document.getElementById('monitorScrollThumb');
+			if (!track || !thumb || !monitorScrollWrap) return;
+			const sh = monitorScrollWrap.scrollHeight;
+			const ch = monitorScrollWrap.clientHeight;
+			if (sh <= ch) {
+				thumb.style.display = 'none';
+				return;
+			}
+			thumb.style.display = 'block';
+			const thumbHeight = Math.max(20, (ch / sh) * ch);
+			const maxScroll = sh - ch;
+			const thumbTop = maxScroll <= 0 ? 0 : (monitorScrollWrap.scrollTop / maxScroll) * (ch - thumbHeight);
+			thumb.style.height = thumbHeight + 'px';
+			thumb.style.top = thumbTop + 'px';
+		}
+
 		function trimOldLines() {
 			// Trim old lines from raw text array
 			// Trim down to exactly maxLines, removing everything over the limit
@@ -3521,20 +3603,20 @@ export function getWebviewContentHtml(cspSource: string): string {
 				rawLines.splice(0, linesToRemove);
 				lineCount = rawLines.length;
 				totalTrimmedLines += linesToRemove;
+				eventLineNumbers = eventLineNumbers.filter(function (n) { return n > totalTrimmedLines; });
 				
 				// Incrementally remove DOM nodes instead of full re-render (much faster!)
 				if (monitor && isFollowing && !filterPattern && !excludeFilterPattern) {
 					// Direct child removal is much faster than querySelectorAll
 					// Remove the first N children that are line elements (not buffer line)
 					let removed = 0;
-					while (removed < linesToRemove && monitor.firstElementChild) {
-						const child = monitor.firstElementChild;
+					while (removed < linesToRemove && monitorContent && monitorContent.firstElementChild) {
+						const child = monitorContent.firstElementChild;
 						// Only remove elements with data-line attribute (actual lines, not buffer)
 						if (child.classList.contains('line') && child.hasAttribute('data-line')) {
-							monitor.removeChild(child);
+							monitorContent.removeChild(child);
 							removed++;
 						} else {
-							// Skip non-line elements (like scrollbar indicator) - shouldn't happen, but be safe
 							break;
 						}
 					}
@@ -3552,14 +3634,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 						isProgrammaticScroll = true; // Mark as programmatic scroll
 						requestAnimationFrame(() => {
 							if (monitor && isFollowing) {
-								const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+								const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
 								lastScrollTop = newScrollTop; // Update BEFORE scrolling to prevent handler from thinking we scrolled up
-								monitor.scrollTop = newScrollTop;
+								monitorScrollWrap.scrollTop = newScrollTop;
 								// Reset flag after a short delay to allow scroll event to process
 								setTimeout(() => {
 									isProgrammaticScroll = false;
 								}, 50);
 							}
+							updateScrollbarEventMarks();
 							pendingScroll = false;
 						});
 					}
@@ -3622,7 +3705,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const completeLine = line + newlineChar;
 				rawLines.push(completeLine);
 				lineCount++;
-				
+				if (completeLine.includes('[[ CONNECTED ]]') || completeLine.includes('[[ DISCONNECTED ]]') ||
+					completeLine.includes('[[ RESET SENT TO DEVICE ]]') || completeLine.includes('[[ PAUSED ') || completeLine.includes('[[ RESUMED ')) {
+					eventLineNumbers.push(lineCount);
+				}
 				// Process line for plotting
 				if (!isStatusMessage) {
 					processLineForPlot(completeLine);
@@ -3672,7 +3758,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 				// Anchor was trimmed - we must re-render, but unfreeze so user can scroll
 				// Record scroll position BEFORE unfreezing (to track how far user scrolls)
-				const currentScrollTop = monitor ? monitor.scrollTop : 0;
+				const currentScrollTop = monitor ? monitorScrollWrap.scrollTop : 0;
 				// Set anchorLostScrollTop BEFORE unfreezing so render knows to skip anchor restoration
 				anchorLostScrollTop = currentScrollTop;
 				unfreezeView();
@@ -3681,7 +3767,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				renderLinesWithBuffer();
 				// Update anchorLostScrollTop after render in case scroll position changed slightly
 				if (monitor) {
-					anchorLostScrollTop = monitor.scrollTop;
+					anchorLostScrollTop = monitorScrollWrap.scrollTop;
 				}
 				// Don't re-freeze immediately - wait for user to scroll down 20+ lines
 				return;
@@ -3709,7 +3795,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Remove existing buffer line before appending new complete lines
 			// This prevents duplicates when a partial line completes
-			const existingBuffer = monitor.querySelector('.line-buffer');
+			const existingBuffer = monitorContent ? monitorContent.querySelector('.line-buffer') : null;
 			if (existingBuffer) {
 				existingBuffer.remove();
 			}
@@ -3759,7 +3845,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Append fragment to DOM (single reflow)
-			monitor.appendChild(fragment);
+			if (monitorContent) monitorContent.appendChild(fragment);
 			
 			// Update buffer line if it exists (after appending complete lines)
 			if (lineBuffer) {
@@ -3769,6 +3855,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Update tracking
 			lastRenderedLineIndex = endIndex - 1;
 			currentAnsiState = state;
+			updateScrollbarEventMarks();
 			
 			// Scroll to bottom - use requestAnimationFrame to batch scroll operations
 			// This prevents blocking if multiple batches arrive quickly
@@ -3777,9 +3864,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 				isProgrammaticScroll = true; // Mark as programmatic scroll
 				requestAnimationFrame(() => {
 					if (monitor && isFollowing) {
-						const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+						const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
 						lastScrollTop = newScrollTop; // Update BEFORE scrolling to prevent handler from thinking we scrolled up
-						monitor.scrollTop = newScrollTop;
+						monitorScrollWrap.scrollTop = newScrollTop;
 						// Reset flag after a short delay to allow scroll event to process
 						setTimeout(() => {
 							isProgrammaticScroll = false;
@@ -3806,7 +3893,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const bufferDiv = document.createElement('div');
 			bufferDiv.className = 'line line-buffer';
 			bufferDiv.innerHTML = linkifyFileLineRefs(result.html);
-			monitor.appendChild(bufferDiv);
+			monitorContent.appendChild(bufferDiv);
 			currentAnsiState = result.finalState;
 			
 			// Scroll to bottom if following - use throttled scroll
@@ -3815,9 +3902,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 				isProgrammaticScroll = true; // Mark as programmatic scroll
 				requestAnimationFrame(() => {
 					if (monitor && isFollowing) {
-						const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+						const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
 						lastScrollTop = newScrollTop; // Update BEFORE scrolling
-						monitor.scrollTop = newScrollTop;
+						monitorScrollWrap.scrollTop = newScrollTop;
 						setTimeout(() => {
 							isProgrammaticScroll = false;
 						}, 50);
@@ -3834,7 +3921,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 			
-			const previousScrollTop = monitor.scrollTop;
+			const previousScrollTop = monitorScrollWrap.scrollTop;
 			const shouldStickToBottom = isFollowing;
 			let anchorLineNumber = null;
 			let anchorOffset = 0;
@@ -3894,8 +3981,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				state = result.finalState; // Maintain state across lines
 			}
 			
-			// Update the monitor with rendered HTML
-			monitor.innerHTML = html;
+			// Update the monitor content (keeps scrollbar-indicator and scrollbar-event-marks)
+			if (monitorContent) monitorContent.innerHTML = html;
 			
 			// No need to attach event listeners - event delegation handles all clicks
 			
@@ -3912,9 +3999,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 				isProgrammaticScroll = true; // Mark as programmatic scroll
 				requestAnimationFrame(() => {
 					if (monitor && isFollowing) {
-						const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+						const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
 						lastScrollTop = newScrollTop; // Update BEFORE scrolling
-						monitor.scrollTop = newScrollTop;
+						monitorScrollWrap.scrollTop = newScrollTop;
 						setTimeout(() => {
 							isProgrammaticScroll = false;
 						}, 50);
@@ -3928,16 +4015,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 				// If anchor was lost and we're waiting for user to scroll 20+ lines,
 				// just maintain scroll position without anchor-based restoration
 				if (anchorLostScrollTop !== null && anchorLineNumber === null) {
-					const maxScroll = Math.max(0, monitor.scrollHeight - monitor.clientHeight);
+					const maxScroll = Math.max(0, monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight);
 					const targetTop = Math.min(previousScrollTop, maxScroll);
-					monitor.scrollTop = Math.max(0, targetTop);
+					monitorScrollWrap.scrollTop = Math.max(0, targetTop);
 					restored = true;
 				} else if (anchorLineNumber !== null) {
 					// Check if anchor line still exists (hasn't been trimmed)
 					if (anchorLineNumber > totalTrimmedLines) {
 						const anchorEl = monitor.querySelector('.line[data-line="' + anchorLineNumber + '"]');
 						if (anchorEl instanceof HTMLElement) {
-							monitor.scrollTop = Math.max(0, anchorEl.offsetTop + anchorOffset);
+							monitorScrollWrap.scrollTop = Math.max(0, anchorEl.offsetTop + anchorOffset);
 							restored = true;
 						}
 					}
@@ -3946,31 +4033,32 @@ export function getWebviewContentHtml(cspSource: string): string {
 					if (!restored && anchorLineNumber <= totalTrimmedLines) {
 						if (anchorLostScrollTop !== null) {
 							// Maintain scroll position - user is scrolling after anchor was lost
-							const maxScroll = Math.max(0, monitor.scrollHeight - monitor.clientHeight);
+							const maxScroll = Math.max(0, monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight);
 							const targetTop = Math.min(previousScrollTop, maxScroll);
-							monitor.scrollTop = Math.max(0, targetTop);
+							monitorScrollWrap.scrollTop = Math.max(0, targetTop);
 							restored = true;
 						} else {
 							// No anchor lost tracking - scroll to top of remaining buffer
-							monitor.scrollTop = 0;
+							monitorScrollWrap.scrollTop = 0;
 							restored = true;
 						}
 					}
 				}
 				
 				if (!restored) {
-					const maxScroll = Math.max(0, monitor.scrollHeight - monitor.clientHeight);
+					const maxScroll = Math.max(0, monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight);
 					const targetTop = Math.min(previousScrollTop, maxScroll);
-					monitor.scrollTop = Math.max(0, targetTop);
+					monitorScrollWrap.scrollTop = Math.max(0, targetTop);
 				}
 			}
-			lastScrollTop = monitor.scrollTop;
+			lastScrollTop = monitorScrollWrap.scrollTop;
 			
 			// Update global ANSI state for new incoming data
 			currentAnsiState = state;
 			
 			// Update scrollbar indicator if view is frozen
 			updateScrollbarIndicator();
+			updateScrollbarEventMarks();
 		}
 
 		// Monitor scroll events to detect when user scrolls up/down
@@ -3984,7 +4072,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 						return;
 					}
 					
-					const currentScrollTop = monitor.scrollTop;
+					const currentScrollTop = monitorScrollWrap.scrollTop;
 					const scrolledUp = currentScrollTop < lastScrollTop;
 					const nearBottom = isAtBottom();
 					const wasFollowing = isFollowing;
@@ -4033,8 +4121,53 @@ export function getWebviewContentHtml(cspSource: string): string {
 					}
 					
 					lastScrollTop = currentScrollTop;
+					updateScrollbarEventMarks();
 				}
-				monitor.addEventListener('scroll', handleScroll);
+				monitorScrollWrap.addEventListener('scroll', handleScroll);
+				monitorScrollWrap.addEventListener('scroll', updateScrollThumb);
+				updateScrollThumb();
+				(function setupThumbDrag() {
+					const track = document.getElementById('monitorCustomScrollbar');
+					const thumb = document.getElementById('monitorScrollThumb');
+					if (!track || !thumb || !monitorScrollWrap) return;
+					let dragStartY = 0, dragStartScrollTop = 0;
+					thumb.addEventListener('mousedown', function (e) {
+						e.preventDefault();
+						dragStartY = e.clientY;
+						dragStartScrollTop = monitorScrollWrap.scrollTop;
+						function onMove(e2) {
+							const ch = monitorScrollWrap.clientHeight;
+							const sh = monitorScrollWrap.scrollHeight;
+							const maxScroll = sh - ch;
+							if (maxScroll <= 0) return;
+							const deltaY = e2.clientY - dragStartY;
+							const thumbHeight = Math.max(20, (ch / sh) * ch);
+							const trackHeight = ch;
+							const moveRatio = maxScroll / (trackHeight - thumbHeight);
+							const newScrollTop = Math.max(0, Math.min(maxScroll, dragStartScrollTop + deltaY * moveRatio));
+							monitorScrollWrap.scrollTop = newScrollTop;
+						}
+						function onUp() {
+							document.removeEventListener('mousemove', onMove);
+							document.removeEventListener('mouseup', onUp);
+						}
+						document.addEventListener('mousemove', onMove);
+						document.addEventListener('mouseup', onUp);
+					});
+					track.addEventListener('mousedown', function (e) {
+						if (e.target === thumb) return;
+						const rect = track.getBoundingClientRect();
+						const ch = monitorScrollWrap.clientHeight;
+						const sh = monitorScrollWrap.scrollHeight;
+						const maxScroll = sh - ch;
+						if (maxScroll <= 0) return;
+						const relY = e.clientY - rect.top;
+						const thumbHeight = Math.max(20, (ch / sh) * ch);
+						const clickRatio = relY / ch;
+						const newScrollTop = Math.max(0, Math.min(maxScroll, clickRatio * (sh - ch)));
+						monitorScrollWrap.scrollTop = newScrollTop;
+					});
+				})();
 			} catch (e) {
 				console.error('FancyMon: Error setting up scroll listener:', e);
 			}
@@ -4178,7 +4311,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 			
 			// Hide context menu on scroll
-			monitor.addEventListener('scroll', () => {
+			monitorScrollWrap.addEventListener('scroll', () => {
 				hideContextMenu();
 			});
 		}
@@ -4296,17 +4429,19 @@ export function getWebviewContentHtml(cspSource: string): string {
 			lineBuffer = '';
 			lineCount = 0;
 			totalTrimmedLines = 0;
+			eventLineNumbers = [];
 			runStartTime = Date.now();
 			lineCountAtRunStart = 0;
 			missedLineCount = 0;
 			currentAnsiState = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
-			monitor.innerHTML = '';
+			if (monitorContent) monitorContent.innerHTML = '';
 			lastScrollTop = 0;
 			isFollowing = true; // Reset to following mode after clear
 			unfreezeView();
 			lastRenderedLineIndex = -1; // Reset render tracking
 			needsFullRender = false;
 			updateLineUsage();
+			updateScrollbarEventMarks();
 			vscode.postMessage({ command: 'clear' });
 		});
 
@@ -4582,8 +4717,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 			
-			const scrollTop = monitor.scrollTop;
-			const clientHeight = monitor.clientHeight;
+			const scrollTop = monitorScrollWrap.scrollTop;
+			const clientHeight = monitorScrollWrap.clientHeight;
 			const viewportTop = scrollTop;
 			const viewportBottom = scrollTop + clientHeight;
 			
@@ -5455,13 +5590,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 					rawLines = [];
 					lineBuffer = '';
 					lineCount = 0;
+					totalTrimmedLines = 0;
+					eventLineNumbers = [];
 					currentAnsiState = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
-					monitor.innerHTML = '';
+					if (monitorContent) monitorContent.innerHTML = '';
 					lastScrollTop = 0;
 					isFollowing = true; // Reset to following mode after clear
 					lastRenderedLineIndex = -1; // Reset render tracking
 					needsFullRender = false;
 					updateLineUsage();
+					updateScrollbarEventMarks();
 					break;
 					
 				default:
@@ -5484,20 +5622,22 @@ export function getWebviewContentHtml(cspSource: string): string {
 		
 		// Initialize scroll tracking
 		if (monitor) {
-			lastScrollTop = monitor.scrollTop;
+			lastScrollTop = monitorScrollWrap.scrollTop;
 
 			// Handle window resize to ensure monitor fills available space
 			const resizeObserver = new ResizeObserver(() => {
 			// If following, scroll to bottom after resize
 			if (isFollowing && monitor) {
 				isProgrammaticScroll = true;
-				const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+				const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
 				lastScrollTop = newScrollTop;
-				monitor.scrollTop = newScrollTop;
+				monitorScrollWrap.scrollTop = newScrollTop;
 				setTimeout(() => {
 					isProgrammaticScroll = false;
 				}, 50);
 			}
+			updateScrollbarEventMarks();
+			updateScrollThumb();
 			});
 			resizeObserver.observe(document.body);
 
@@ -5506,13 +5646,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// If following, scroll to bottom after resize
 			if (isFollowing && monitor) {
 				isProgrammaticScroll = true;
-				const newScrollTop = monitor.scrollHeight - monitor.clientHeight;
+				const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
 				lastScrollTop = newScrollTop;
-				monitor.scrollTop = newScrollTop;
+				monitorScrollWrap.scrollTop = newScrollTop;
 				setTimeout(() => {
 					isProgrammaticScroll = false;
 				}, 50);
 			}
+			updateScrollbarEventMarks();
+			updateScrollThumb();
 			});
 		}
 

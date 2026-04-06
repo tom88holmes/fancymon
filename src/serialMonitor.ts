@@ -812,9 +812,12 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 				continue;
 			}
 
-			// Format the output line
-			// --- 0x4037602e: panic_abort at C:/.../panic.c:466
-			const formattedLine = `\u001b[0m--- ${addrLine}: ${funcName} at ${fileLine}`;
+			// Basename only (file:line), then pad to minimum width inside brackets
+			const fileLineBasename = path.basename(fileLine);
+			const FILE_LINE_MIN_WIDTH = 40;
+			const filePart = fileLineBasename.padEnd(FILE_LINE_MIN_WIDTH);
+			// --- 0x4207009b: [        ui_utils_image_processing.c:857] set_routine_notification_image
+			const formattedLine = `\u001b[0m--- ${addrLine}: [ ${filePart} ] ${funcName}`;
 			results.push(formattedLine);
 		}
 		return results;
