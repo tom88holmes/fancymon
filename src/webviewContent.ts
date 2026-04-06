@@ -2227,8 +2227,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 						// Build pattern string - use String.fromCharCode to avoid template literal backslash issues
 						// We need \s (whitespace) and \d (digit) in the regex, so we build the pattern carefully
 						const bs = String.fromCharCode(92); // backslash
-						// Pattern: (?:^|[^A-Za-z0-9_])KEYNAME\s*[=:]\s*(-?\d+\.?\d*)(?:\s*[A-Za-z%]+)?
-						const pattern = '(?:^|[^A-Za-z0-9_])' + keyName + bs + 's*[=:]' + bs + 's*(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
+						// Pattern: after KEYNAME allow either "[:=] value" or whitespace-only " value" (e.g. "probe file_next 16343 us")
+						const pattern = '(?:^|[^A-Za-z0-9_])' + keyName + '(?:' + bs + 's*[:=]' + bs + 's*|' + bs + 's+)(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
 						try {
 							return new RegExp(pattern);
 						} catch (e) {
@@ -2818,7 +2818,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 							if (savedVar.keyName) {
 								const bs = String.fromCharCode(92);
 								const keyName = savedVar.keyName;
-								const keyPattern = '(?:^|[^A-Za-z0-9_])' + keyName + bs + 's*[=:]' + bs + 's*(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
+								const keyPattern = '(?:^|[^A-Za-z0-9_])' + keyName + '(?:' + bs + 's*[:=]' + bs + 's*|' + bs + 's+)(-?' + bs + 'd+' + bs + '.' + '?' + bs + 'd*)(?:' + bs + 's*[A-Za-z%]+)?';
 								keyRegex = safeRegExp(keyPattern, undefined, 'loadSession: keyPattern');
 							}
 							
