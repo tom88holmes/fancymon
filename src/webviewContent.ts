@@ -2135,9 +2135,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// IMPORTANT: The generated regex must match future lines.
 			// So we generate the pattern from the portion AFTER the time token, and we will also
 			// apply the regex to that same substring at runtime.
-			const timeEnd = getTimeTokenEndIndexForLine(plainText);
+			// Drop first character for variable regex only (e.g. ESP-IDF I/W/E/D); time still parsed from full line.
+			const plotLine = plainText.length > 0 ? plainText.slice(1) : plainText;
+			const timeEnd = getTimeTokenEndIndexForLine(plotLine);
 			const matchFromTimeToken = timeEnd > 0;
-			const patternSourceText = matchFromTimeToken ? plainText.substring(timeEnd) : plainText;
+			const patternSourceText = matchFromTimeToken ? plotLine.substring(timeEnd) : plotLine;
 
 			// Generate a common pattern that captures ALL numbers
 			const patternResult = generateCommonPattern(patternSourceText);
@@ -2207,12 +2209,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// IMPORTANT: extractedNumbers positions are in plainText (full text), but we need position in patternSourceText.
 					// If matchFromTimeToken, we need to find the number's position in patternSourceText.
 					let keyPosition;
+					// plotLine = plainText.slice(1); positions in patternSourceText use plotLine indices.
+					const posInPlotLine = numObjForKey.position >= 1 ? numObjForKey.position - 1 : 0;
 					if (matchFromTimeToken) {
-						// The position in numObjForKey is in plainText (full stripped text).
-						// patternSourceText is plainText.substring(timeEnd), so we just subtract timeEnd.
-						keyPosition = numObjForKey.position - timeEnd;
+						keyPosition = posInPlotLine - timeEnd;
 					} else {
-						keyPosition = numObjForKey.position;
+						keyPosition = posInPlotLine;
 					}
 					if (keyPosition >= 0 && keyPosition < patternSourceText.length) {
 						keyName = suggestVariableNameFromContext(patternSourceText, keyPosition);
@@ -2794,9 +2796,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 						const usedY1Colors = new Set();
 						const usedY2Colors = new Set();
 
-						// Determine if we should match from time token (check if we have extraction pattern)
+						// Same as addVariableToPlot / processLineForPlot: time token end is on plotLine (line without first char).
 						const plainText = stripAnsiCodes(extractionPattern);
-						const timeEnd = plainText ? getTimeTokenEndIndexForLine(plainText) : 0;
+						const plotLine = plainText && plainText.length > 0 ? plainText.slice(1) : plainText;
+						const timeEnd = plainText ? getTimeTokenEndIndexForLine(plotLine) : 0;
 						
 						session.variables.forEach((savedVar, idx) => {
 							const axisKey = savedVar.axis === 'y2' ? 'y2' : 'y';
@@ -2971,14 +2974,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const matchCache = new Map();
 			const matchCacheAfterTime = new Map();
 
-			// Precompute the substring after the time token for variables that need it
-			const timeEnd = getTimeTokenEndIndexForLine(plainText);
-			const afterTimeText = timeEnd > 0 ? plainText.substring(timeEnd) : '';
+			// Variable regex runs on plotLine (full line minus first char, e.g. severity letter).
+			const plotLine = plainText.length > 0 ? plainText.slice(1) : plainText;
+			const timeEnd = getTimeTokenEndIndexForLine(plotLine);
+			const afterTimeText = timeEnd > 0 ? plotLine.substring(timeEnd) : '';
 			
 			plotVariables.forEach((variable, index) => {
 				try {
 					let match;
-					const matchText = variable.matchFromTimeToken ? afterTimeText : plainText;
+					const matchText = variable.matchFromTimeToken ? afterTimeText : plotLine;
 					const cache = variable.matchFromTimeToken ? matchCacheAfterTime : matchCache;
 					
 					// Prefer key-based extraction when available.
