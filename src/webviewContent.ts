@@ -3692,15 +3692,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return lineHeight || 16;
 		}
 
+		function getDistanceFromBottomPx() {
+			if (!monitor) return 0;
+			return monitorScrollWrap.scrollHeight - monitorScrollWrap.scrollTop - monitorScrollWrap.clientHeight;
+		}
+
+		// Lenient: used to re-enable follow when user scrolls back toward the tail
 		function isAtBottom() {
-			// Check if scrolled to within 10 lines of the bottom
-			if (!monitor) return true; // Default to bottom if monitor doesn't exist
+			if (!monitor) return true;
 			const lineHeight = getLineHeightEstimate();
 			const linesThreshold = 10;
 			const pixelThreshold = lineHeight * linesThreshold;
-			
-			const distanceFromBottom = monitorScrollWrap.scrollHeight - monitorScrollWrap.scrollTop - monitorScrollWrap.clientHeight;
-			return distanceFromBottom <= pixelThreshold;
+			return getDistanceFromBottomPx() <= pixelThreshold;
+		}
+
+		// Strict: if you are farther than this from the bottom, we are not "pinned" to the tail
+		const PINNED_BOTTOM_PX = 12;
+		function isPinnedToBottom() {
+			return getDistanceFromBottomPx() <= PINNED_BOTTOM_PX;
 		}
 
 		function getAnchorLineInfo(scrollTop) {
@@ -4328,7 +4337,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 					const currentScrollTop = monitorScrollWrap.scrollTop;
 					const scrolledUp = currentScrollTop < lastScrollTop;
 					const nearBottom = isAtBottom();
-					const wasFollowing = isFollowing;
 					
 					// Check if anchor was lost and user has scrolled down more than 20 lines
 					// Do this FIRST before other checks to prevent interference
@@ -4347,18 +4355,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 						}
 					}
 					
-					// Only disable following if user scrolled UP and is not near bottom
-					if (scrolledUp && !nearBottom) {
+					// Disable follow on scroll-up unless still pinned to the absolute bottom.
+					// (Lenient isAtBottom() is ~10 lines — a single wheel tick stays "near" that and used to keep follow on.)
+					if (scrolledUp && !isPinnedToBottom()) {
 						if (isFollowing) {
 							isFollowing = false;
 							freezeView();
-							anchorLostScrollTop = null; // Clear anchor lost tracking
-							// Reset render tracking when switching to non-following mode
+							anchorLostScrollTop = null;
 							needsFullRender = true;
 							lastRenderedLineIndex = -1;
 						} else if (!isFrozenView) {
 							freezeView();
-							anchorLostScrollTop = null; // Clear anchor lost tracking
+							anchorLostScrollTop = null;
 						}
 					} else if (nearBottom) {
 						// Enable following if within 10 lines of bottom
@@ -4378,6 +4386,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 				monitorScrollWrap.addEventListener('scroll', handleScroll);
 				monitorScrollWrap.addEventListener('scroll', updateScrollThumb);
+				// Wheel-up must drop follow immediately; at ~20 lines/s scroll events can lag behind appendData's rAF scroll-to-bottom.
+				monitorScrollWrap.addEventListener(
+					'wheel',
+					function fancyMonMonitorWheel(e) {
+						if (isProgrammaticScroll) return;
+						if (e.deltaY >= 0) return;
+						if (isFollowing) {
+							isFollowing = false;
+							anchorLostScrollTop = null;
+							if (!isFrozenView) {
+								freezeView();
+							}
+							needsFullRender = true;
+							lastRenderedLineIndex = -1;
+						}
+					},
+					{ passive: true }
+				);
 				updateScrollThumb();
 				(function setupThumbDrag() {
 					const track = document.getElementById('monitorCustomScrollbar');
