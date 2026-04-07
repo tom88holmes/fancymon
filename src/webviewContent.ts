@@ -646,6 +646,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			height: 100%;
 		}
 
+		/* Hide Plotly's native x-unified hover UI (x label + colour ticks); custom legends show y @ x. */
+		/* Keep hovermode so plotly_hover still fires; pointer-events none so the layer does not steal mouse. */
+		#plotDiv .hoverlayer {
+			opacity: 0 !important;
+			pointer-events: none !important;
+		}
+
 		.custom-legend {
 			position: absolute;
 			top: 10px;
@@ -729,12 +736,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 			font-weight: 500;
 		}
 
-		.legend-value {
+		.legend-hover-values {
 			color: #1a1a1a;
 			font-weight: 500;
-			min-width: 5.5ch;
 			display: inline-block;
-			text-align: right;
+			text-align: left;
+			font-variant-numeric: tabular-nums;
+			flex: 1;
+			min-width: 0;
 		}
 
 		.legend-hide-all {
@@ -908,7 +917,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			</div>
 			<div class="plot-control-row">
 				<button id="addVariableBtn" disabled>Add New Only</button>
-				<button type="button" id="findAndAddAllBtn" disabled title="Same enable rule as Add New Only. If you have no series yet, adds them from the current pattern (like Add New Only) then scans the full buffer.">Find and Add All</button>
+				<button type="button" id="findAndAddAllBtn" disabled title="Same enable rule as Add New Only. With Pattern Input + Y1/Y2: adds new series then fills them from the buffer only (existing series are not rescanned, avoiding duplicate points). With an empty pattern: rescans the buffer for all series already on the plot.">Find and Add All</button>
 				<button id="clearPlotBtn">Clear Plot</button>
 				<button id="removeAllVariablesBtn">Remove All Variables</button>
 				<button id="pausePlotBtn">Pause</button>
@@ -1517,6 +1526,63 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return n.toFixed(2).replace(/\.?0+$/, '') || String(n);
 		}
 
+		// Format X (time axis) for Y1 legend hover — matches RTC vs uptime mode
+		function formatPlotHoverX(x) {
+			if (x == null || x === '') {
+				return '\u2014';
+			}
+			if (currentTimeAxisMode === 'rtc') {
+				let d;
+				if (x instanceof Date) {
+					d = x;
+				} else if (typeof x === 'number') {
+					d = new Date(x);
+				} else {
+					d = new Date(String(x));
+				}
+				if (isNaN(d.getTime())) {
+					return '\u2014';
+				}
+				const pad = function (m) {
+					return String(m).padStart(2, '0');
+				};
+				return (
+					d.getFullYear() +
+					'-' +
+					pad(d.getMonth() + 1) +
+					'-' +
+					pad(d.getDate()) +
+					' ' +
+					pad(d.getHours()) +
+					':' +
+					pad(d.getMinutes()) +
+					':' +
+					pad(d.getSeconds()) +
+					'.' +
+					String(d.getMilliseconds()).padStart(3, '0')
+				);
+			}
+			const n = typeof x === 'number' ? x : parseFloat(x);
+			if (!isNaN(n)) {
+				return formatPlotNumber(n);
+			}
+			return '\u2014';
+		}
+
+		// Y1/Y2 legend hover line: y @ x
+		function formatLegendHoverLine(pt) {
+			if (!pt) {
+				return '\u2014';
+			}
+			const y =
+				typeof pt.y === 'number' || (typeof pt.y === 'string' && !isNaN(parseFloat(pt.y)))
+					? Number(pt.y)
+					: NaN;
+			const yStr = !isNaN(y) ? formatPlotNumber(y) : '\u2014';
+			const xStr = formatPlotHoverX(pt.x);
+			return yStr + ' @ ' + xStr;
+		}
+
 		// Initialize Plotly.js
 		function initializeChart() {
 			if (!plotDiv || typeof Plotly === 'undefined') {
@@ -1610,8 +1676,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				// Hide Plotly's native legend (using custom HTML legends)
 				showlegend: false,
 				margin: { l: 60, r: 60, t: 80, b: 50 },
+				// x unified drives plotly_hover point lists; native hover layer is hidden via #plotDiv .hoverlayer CSS
 				hovermode: 'x unified',
-				// Values shown in custom legend on hover; keep default tooltip minimal
 				hoverlabel: { bgcolor: 'transparent', bordercolor: 'transparent', font: { size: 0 }, namelength: 0 }
 			};
 
@@ -1632,24 +1698,29 @@ export function getWebviewContentHtml(cspSource: string): string {
 			Plotly.newPlot(plotDiv, traces, layout, config);
 			plotInitialized = true;
 
-			// Show hovered x values in legend area (fixed-width so columns don't jump)
-			plotDiv.on('plotly_hover', (eventData) => {
-				if (!eventData || !eventData.points || eventData.points.length === 0) return;
-				const points = eventData.points;
-				document.querySelectorAll('.custom-legend-item').forEach((item) => {
+			function applyHoverToCustomLegend(legendEl, points) {
+				if (!legendEl) return;
+				legendEl.querySelectorAll('.custom-legend-item').forEach((item) => {
 					const variableId = item.dataset.variableId;
 					const variable = plotVariables.find(v => v.id === variableId);
 					if (!variable) return;
 					const pt = points.find(p => (p.fullData && p.fullData.name === variable.name) || (p.data && p.data.name === variable.name));
-					const valueSpan = item.querySelector('.legend-value');
-					if (valueSpan) {
-						const y = pt != null && (typeof pt.y === 'number' || (typeof pt.y === 'string' && !isNaN(parseFloat(pt.y)))) ? Number(pt.y) : NaN;
-						valueSpan.textContent = !isNaN(y) ? formatPlotNumber(y) : '\u2014';
+					const hoverSpan = item.querySelector('.legend-hover-values');
+					if (hoverSpan) {
+						hoverSpan.textContent = formatLegendHoverLine(pt);
 					}
 				});
+			}
+
+			// Show hovered y @ x in Y1 and Y2 custom legends
+			plotDiv.on('plotly_hover', (eventData) => {
+				if (!eventData || !eventData.points || eventData.points.length === 0) return;
+				const points = eventData.points;
+				applyHoverToCustomLegend(document.getElementById('y1Legend'), points);
+				applyHoverToCustomLegend(document.getElementById('y2Legend'), points);
 			});
 			plotDiv.on('plotly_unhover', () => {
-				document.querySelectorAll('.legend-value').forEach(span => {
+				document.querySelectorAll('.legend-hover-values').forEach(span => {
 					span.textContent = '\u2014';
 				});
 			});
@@ -1960,7 +2031,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		// Find and Add All: match Add New Only enabled/disabled only (no extra gates — avoids the button sticking off).
-		// If you click Find with no series yet, the handler logs why; see findAndAddAllMatchingFromBuffer.
+		// Handler: with pattern + Y1/Y2, runs Add then full buffer scan; with empty pattern, rescan existing series only.
 		function syncFindButtonToAddNewOnlyButton() {
 			const findBtn = document.getElementById('findAndAddAllBtn');
 			if (!findBtn || !addVariableBtn) return;
@@ -2226,8 +2297,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (!patternResult) return;
 			
 			const { pattern, sortedNumbers } = patternResult;
-			const regex = safeRegExp(pattern, undefined, 'addVariableToPlot');
-			if (!regex) {
+			if (!safeRegExp(pattern, undefined, 'addVariableToPlot')) {
 				return;
 			}
 
@@ -2235,6 +2305,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const usedY2Colors = new Set(plotVariables.filter(v => v.axis === 'y2').map(v => v.color).filter(c => c));
 
 			selectedNumbers.forEach((axis, numIndex) => {
+				// One RegExp per series — shared instances broke buffer replay (Find) when lastIndex/exec state diverged.
+				const regex = safeRegExp(pattern, undefined, 'addVariableToPlot:variable');
+				if (!regex) {
+					return;
+				}
 				// numIndex is the index in the *filtered* list shown in the UI (1..N).
 				// Since we generate the pattern from the portion after the time token, the extracted numbers
 				// in that substring are also indexed 1..N in the same order. So we map directly by n.index.
@@ -2559,15 +2634,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const nameSpan = document.createElement('span');
 				nameSpan.textContent = variable.name + ': ';
 				nameSpan.className = 'legend-name';
-				
-				const valueSpan = document.createElement('span');
-				valueSpan.className = 'legend-value';
-				valueSpan.textContent = '\u2014';
-				valueSpan.style.marginLeft = '2px';
+
+				const hoverSpan = document.createElement('span');
+				hoverSpan.className = 'legend-hover-values';
+				hoverSpan.textContent = '\u2014';
+				hoverSpan.title = 'Y @ X at hover';
 				
 				item.appendChild(colorBox);
 				item.appendChild(nameSpan);
-				item.appendChild(valueSpan);
+				item.appendChild(hoverSpan);
 				
 				// Click to toggle visibility
 				item.addEventListener('click', () => {
@@ -2637,15 +2712,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const nameSpan = document.createElement('span');
 				nameSpan.textContent = variable.name + ': ';
 				nameSpan.className = 'legend-name';
-				
-				const valueSpan = document.createElement('span');
-				valueSpan.className = 'legend-value';
-				valueSpan.textContent = '\u2014';
-				valueSpan.style.marginLeft = '2px';
+
+				const hoverSpan = document.createElement('span');
+				hoverSpan.className = 'legend-hover-values';
+				hoverSpan.textContent = '\u2014';
+				hoverSpan.title = 'Y @ X at hover';
 				
 				item.appendChild(colorBox);
 				item.appendChild(nameSpan);
-				item.appendChild(valueSpan);
+				item.appendChild(hoverSpan);
 				
 				// Click to toggle visibility
 				item.addEventListener('click', () => {
@@ -2703,11 +2778,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const Y1_COUNT = 15;
 			const Y2_COUNT = 15;
 			const dummyPattern = '(\\d+)';
-			let dummyRegex = null;
-			try {
-				dummyRegex = new RegExp(dummyPattern);
-			} catch (e) {
-				dummyRegex = /(\d+)/;
+			if (!safeRegExp(dummyPattern, undefined, 'loadTestPlotData')) {
+				return;
 			}
 
 			removeAllVariables();
@@ -2716,6 +2788,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const usedY2Colors = new Set();
 
 			for (let i = 0; i < Y1_COUNT; i++) {
+				const dummyRegex = safeRegExp(dummyPattern, undefined, 'loadTestPlotData:y1');
+				if (!dummyRegex) {
+					continue;
+				}
 				const name = 'test_Y1_' + (i + 1);
 				const color = getNextColorForAxis('y', usedY1Colors);
 				usedY1Colors.add(color);
@@ -2742,6 +2818,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 
 			for (let i = 0; i < Y2_COUNT; i++) {
+				const dummyRegex = safeRegExp(dummyPattern, undefined, 'loadTestPlotData:y2');
+				if (!dummyRegex) {
+					continue;
+				}
 				const name = 'test_Y2_' + (i + 1);
 				const color = getNextColorForAxis('y2', usedY2Colors);
 				usedY2Colors.add(color);
@@ -2864,8 +2944,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// Use the saved pattern from the first variable (they all share the same pattern)
 					const savedPattern = session.variables[0].pattern;
 					if (savedPattern) {
-						const regex = safeRegExp(savedPattern, undefined, 'loadSession: savedPattern');
-						if (!regex) {
+						if (!safeRegExp(savedPattern, undefined, 'loadSession: savedPattern')) {
 							return;
 						}
 						
@@ -2884,6 +2963,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 						const timeEnd = plainText ? getTimeTokenEndIndexForLine(plotLine) : 0;
 						
 						session.variables.forEach((savedVar, idx) => {
+							const regex = safeRegExp(savedPattern, undefined, 'loadSession: variable');
+							if (!regex) {
+								return;
+							}
 							const axisKey = savedVar.axis === 'y2' ? 'y2' : 'y';
 							const forbiddenY2 = axisKey === 'y2' ? sessionY1Colors : null;
 							const color = resolveVariableColor(
@@ -3042,10 +3125,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		// Process line for plotting. options.ignorePause: run even when plot is paused (buffer replay).
 		// options.batchMode: do not update chart/variables list each line (caller refreshes once). Returns true if chart data changed.
+		// options.restrictToVariableIds: if set, only update variables whose id is in the Set (used after Find adds new series so existing traces are not double-filled from the buffer).
 		function processLineForPlot(line, options) {
 			options = options || {};
 			if (plotVariables.length === 0) return false;
 			if (!options.ignorePause && isPlotPaused) return false;
+			const restrictIds = options.restrictToVariableIds;
 
 			const plainText = stripAnsiCodes(line);
 			const timeValue = extractTimeValue(plainText);
@@ -3054,8 +3139,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 
 			let chartNeedsUpdate = false;
+			const skipMatchCache = options.batchMode === true;
 			
-			// Cache regex matches for variables sharing the same pattern
+			// Cache regex matches for variables sharing the same pattern (live streaming only).
+			// Buffer replay (Find) skips the cache so shared RegExp state cannot reuse a wrong match.
 			// Map pattern string -> Match result (or null if no match)
 			const matchCache = new Map();
 			const matchCacheAfterTime = new Map();
@@ -3067,6 +3154,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			plotVariables.forEach((variable, index) => {
 				try {
+					if (restrictIds && !restrictIds.has(variable.id)) {
+						return;
+					}
 					let match;
 					const matchText = variable.matchFromTimeToken ? afterTimeText : plotLine;
 					const cache = variable.matchFromTimeToken ? matchCacheAfterTime : matchCache;
@@ -3080,6 +3170,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					
 					// Prefer key-based extraction when available.
 					if (variable.keyRegex) {
+						variable.keyRegex.lastIndex = 0;
 						match = variable.keyRegex.exec(matchText);
 						if (match && match[1]) {
 							const value = parseFloat(match[1]);
@@ -3094,20 +3185,23 @@ export function getWebviewContentHtml(cspSource: string): string {
 						return;
 					}
 
-					// Optimization: Check cache first
-					if (cache.has(variable.pattern)) {
+					// Optimization: Check cache first (not during buffer replay)
+					if (!skipMatchCache && cache.has(variable.pattern)) {
 						match = cache.get(variable.pattern);
 					} else {
 						// Execute regex and cache result
 						// If variable.regex is missing (legacy), create it
 						if (!variable.regex) {
-						variable.regex = safeRegExp(variable.pattern, undefined, 'processLineForPlot');
-						if (!variable.regex) {
-							return;
+							variable.regex = safeRegExp(variable.pattern, undefined, 'processLineForPlot');
+							if (!variable.regex) {
+								return;
+							}
 						}
-						}
+						variable.regex.lastIndex = 0;
 						match = variable.regex.exec(matchText);
-						cache.set(variable.pattern, match);
+						if (!skipMatchCache) {
+							cache.set(variable.pattern, match);
+						}
 					}
 					
 					// Use specific capture group index if available (new logic), otherwise default to 1 (legacy)
@@ -3145,12 +3239,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 		function findAndAddAllMatchingFromBuffer() {
 			// Always log first so DevTools proves the handler ran (even on early exit).
 			console.log('FancyMon: Find and Add All — run started | plotVariables:', plotVariables.length, '| rawLines:', rawLines ? rawLines.length : 0);
-			if (plotVariables.length === 0) {
-				// Same preconditions as Add New Only: user often clicks Find first — run Add logic once, then scan.
-				if (patternInput && patternInput.value.trim().length > 0 && selectedNumbers.size > 0) {
-					console.log('FancyMon: Find and Add All — no series yet; running Add New Only from current pattern + Y1/Y2, then buffer scan.');
-					addVariableToPlot();
-				}
+			const hadPatternSelection =
+				patternInput && patternInput.value.trim().length > 0 && selectedNumbers.size > 0;
+			const variableCountBeforeAdd = plotVariables.length;
+			// If the user has a pattern + Y1/Y2 selection, add series from that pattern first — including when the plot
+			// already has variables (otherwise a second Find would only rescan for existing traces and ignore the new pattern).
+			if (hadPatternSelection) {
+				console.log(
+					'FancyMon: Find and Add All — running Add New Only from current pattern + Y1/Y2' +
+						(variableCountBeforeAdd === 0 ? ' (no series yet)' : ' (' + variableCountBeforeAdd + ' series already on plot)') +
+						', then buffer scan.'
+				);
+				addVariableToPlot();
 			}
 			if (plotVariables.length === 0) {
 				console.warn('FancyMon: Find and Add All — abort: no plot series. Paste a line in Pattern Input, select Y1/Y2, then click again (or use Add New Only first).');
@@ -3160,9 +3260,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 				console.warn('FancyMon: Find and Add All — monitor buffer has no complete lines yet (need newline-terminated data).');
 				return;
 			}
+			let restrictToVariableIds = null;
+			if (hadPatternSelection && plotVariables.length > variableCountBeforeAdd) {
+				restrictToVariableIds = new Set(
+					plotVariables.slice(variableCountBeforeAdd).map(function (v) { return v.id; })
+				);
+				console.log(
+					'FancyMon: Find and Add All — scanning buffer for',
+					restrictToVariableIds.size,
+					'new series only (skip replay on existing traces to avoid duplicate points).'
+				);
+			}
 			let needsChart = false;
+			const scanOpts = { ignorePause: true, batchMode: true };
+			if (restrictToVariableIds) {
+				scanOpts.restrictToVariableIds = restrictToVariableIds;
+			}
 			for (let i = 0; i < rawLines.length; i++) {
-				if (processLineForPlot(rawLines[i], { ignorePause: true, batchMode: true })) {
+				if (processLineForPlot(rawLines[i], scanOpts)) {
 					needsChart = true;
 				}
 			}
