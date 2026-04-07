@@ -907,7 +907,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<div class="number-selector" id="numberSelector"></div>
 			</div>
 			<div class="plot-control-row">
-				<button id="addVariableBtn" disabled>Add Variable to Plot</button>
+				<button id="addVariableBtn" disabled>Add New Only</button>
+				<button type="button" id="findAndAddAllBtn" disabled title="Same enable rule as Add New Only. If you have no series yet, adds them from the current pattern (like Add New Only) then scans the full buffer.">Find and Add All</button>
 				<button id="clearPlotBtn">Clear Plot</button>
 				<button id="removeAllVariablesBtn">Remove All Variables</button>
 				<button id="pausePlotBtn">Pause</button>
@@ -1307,6 +1308,66 @@ export function getWebviewContentHtml(cspSource: string): string {
 			} catch {
 				return 0;
 			}
+		}
+
+		// First log "tag" after the timestamp: skip whitespace, optional parenthesized uptime "(12345)", and bare numbers;
+		// then return the first [A-Za-z_][A-Za-z0-9_]* (e.g. mem_util, BATT_SOC). Used to ignore unrelated lines that
+		// share a field name like "internal" on a different message type.
+		function getLineAnchorTokenAfterTimestamp(text) {
+			if (text == null || text === '') return null;
+			let i = 0;
+			const len = text.length;
+			// Avoid tab/newline/CR in quoted string literals here: this script is inside getWebviewContentHtml's template
+			// string; backslash escapes there corrupt the emitted JS (webview SyntaxError).
+			const isSpace = function (c) {
+				const code = c.charCodeAt(0);
+				return code === 32 || code === 9 || code === 13 || code === 10;
+			};
+			while (i < len && isSpace(text[i])) {
+				i++;
+			}
+			while (i < len) {
+				if (text[i] === '(') {
+					const close = text.indexOf(')', i);
+					if (close > i) {
+						i = close + 1;
+						while (i < len && isSpace(text[i])) {
+							i++;
+						}
+						continue;
+					}
+				}
+				const ch = text[i];
+				if (ch >= '0' && ch <= '9') {
+					let j = i + 1;
+					while (j < len && ((text[j] >= '0' && text[j] <= '9') || text[j] === '.')) {
+						j++;
+					}
+					i = j;
+					while (i < len && isSpace(text[i])) {
+						i++;
+					}
+					continue;
+				}
+				if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch === '_') {
+					let j = i + 1;
+					while (j < len) {
+						const c = text[j];
+						const alnum = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '_';
+						if (alnum) {
+							j++;
+						} else {
+							break;
+						}
+					}
+					return text.substring(i, j);
+				}
+				i++;
+				while (i < len && isSpace(text[i])) {
+					i++;
+				}
+			}
+			return null;
 		}
 
 		function tryCreateTimeRegex() {
@@ -1898,8 +1959,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return suggested || targetNumber.text;
 		}
 
+		// Find and Add All: match Add New Only enabled/disabled only (no extra gates — avoids the button sticking off).
+		// If you click Find with no series yet, the handler logs why; see findAndAddAllMatchingFromBuffer.
+		function syncFindButtonToAddNewOnlyButton() {
+			const findBtn = document.getElementById('findAndAddAllBtn');
+			if (!findBtn || !addVariableBtn) return;
+			findBtn.disabled = addVariableBtn.disabled;
+		}
+
 		// Update extraction preview
 		function updateExtractionPreview() {
+			try {
 			if (!patternInput || !extractionPreview) return;
 			
 			const text = patternInput.value;
@@ -1994,10 +2064,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 					extractionPreview.textContent = 'No numbers found';
 				}
 				extractionPreview.classList.remove('has-numbers');
-				numberSelector.innerHTML = '';
+				if (numberSelector) numberSelector.innerHTML = '';
 				addVariableBtn.disabled = true;
 				selectedNumbers.clear();
 			} else {
+				selectedNumbers.clear();
 				let preview = extractedNumbers.map(n => n.index + ': ' + n.text).join(', ');
 				if (timeValue !== null) {
 					preview = 'Time: ' + timeValue + ' | Numbers: ' + preview;
@@ -2006,7 +2077,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				extractionPreview.classList.add('has-numbers');
 				
 				// Update number selector checkboxes
-				numberSelector.innerHTML = '';
+				if (numberSelector) numberSelector.innerHTML = '';
 				extractedNumbers.forEach(num => {
 					const rowDiv = document.createElement('div');
 					rowDiv.className = 'number-selection-row';
@@ -2106,6 +2177,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 							selectedNumbers.delete(num.index);
 						}
 						addVariableBtn.disabled = selectedNumbers.size === 0;
+						syncFindButtonToAddNewOnlyButton();
 					};
 
 					y1Check.addEventListener('change', () => {
@@ -2118,8 +2190,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 						updateSelection();
 					});
 
-					numberSelector.appendChild(rowDiv);
+					if (numberSelector) numberSelector.appendChild(rowDiv);
 				});
+				if (addVariableBtn) {
+					addVariableBtn.disabled = selectedNumbers.size === 0;
+				}
+				syncFindButtonToAddNewOnlyButton();
+			}
+			} finally {
+				syncFindButtonToAddNewOnlyButton();
 			}
 		}
 
@@ -2140,6 +2219,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const timeEnd = getTimeTokenEndIndexForLine(plotLine);
 			const matchFromTimeToken = timeEnd > 0;
 			const patternSourceText = matchFromTimeToken ? plotLine.substring(timeEnd) : plotLine;
+			const lineAnchorToken = getLineAnchorTokenAfterTimestamp(patternSourceText);
 
 			// Generate a common pattern that captures ALL numbers
 			const patternResult = generateCommonPattern(patternSourceText);
@@ -2251,6 +2331,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					captureIndex: captureIndex,
 					keyName: keyName,
 					keyRegex: keyRegex,
+					lineAnchorToken: lineAnchorToken,
 					data: [],
 					color: color,
 					axis: axisKey,
@@ -2722,6 +2803,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					pattern: v.pattern,
 					captureIndex: v.captureIndex,
 					keyName: v.keyName,
+					lineAnchorToken: v.lineAnchorToken || null,
 					axis: v.axis,
 					color: v.color
 				}))
@@ -2833,6 +2915,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 								captureIndex: savedVar.captureIndex || (idx + 1), // Use saved captureIndex
 								keyName: savedVar.keyName,
 								keyRegex: keyRegex,
+								lineAnchorToken: savedVar.lineAnchorToken || null,
 								data: [],
 								color: color,
 								axis: axisKey,
@@ -2957,14 +3040,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return null;
 		}
 
-		// Process line for plotting
-		function processLineForPlot(line) {
-			if (isPlotPaused || plotVariables.length === 0) return;
+		// Process line for plotting. options.ignorePause: run even when plot is paused (buffer replay).
+		// options.batchMode: do not update chart/variables list each line (caller refreshes once). Returns true if chart data changed.
+		function processLineForPlot(line, options) {
+			options = options || {};
+			if (plotVariables.length === 0) return false;
+			if (!options.ignorePause && isPlotPaused) return false;
 
 			const plainText = stripAnsiCodes(line);
 			const timeValue = extractTimeValue(plainText);
 			if (timeValue === null) {
-				return;
+				return false;
 			}
 
 			let chartNeedsUpdate = false;
@@ -2984,6 +3070,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 					let match;
 					const matchText = variable.matchFromTimeToken ? afterTimeText : plotLine;
 					const cache = variable.matchFromTimeToken ? matchCacheAfterTime : matchCache;
+
+					if (variable.lineAnchorToken) {
+						const liveAnchor = getLineAnchorTokenAfterTimestamp(matchText);
+						if (liveAnchor !== variable.lineAnchorToken) {
+							return;
+						}
+					}
 					
 					// Prefer key-based extraction when available.
 					if (variable.keyRegex) {
@@ -2997,8 +3090,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 								}
 								chartNeedsUpdate = true;
 							}
-						} else {
-							console.log('FancyMon: keyRegex did not match for', variable.name, 'keyName:', variable.keyName, 'matchText sample:', matchText.substring(0, 100));
 						}
 						return;
 					}
@@ -3040,16 +3131,46 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 			});
 
-			// Batch chart update (only once per line, not per variable)
-			if (chartNeedsUpdate && plotInitialized && plotDiv) {
+			if (!options.batchMode) {
+				if (chartNeedsUpdate && plotInitialized && plotDiv) {
+					updateChart();
+				}
+				if (isPlotPaused || (plotVariables.length > 0 && plotVariables[0].data.length % 10 === 0)) {
+					updateVariablesList();
+				}
+			}
+			return chartNeedsUpdate;
+		}
+
+		function findAndAddAllMatchingFromBuffer() {
+			// Always log first so DevTools proves the handler ran (even on early exit).
+			console.log('FancyMon: Find and Add All — run started | plotVariables:', plotVariables.length, '| rawLines:', rawLines ? rawLines.length : 0);
+			if (plotVariables.length === 0) {
+				// Same preconditions as Add New Only: user often clicks Find first — run Add logic once, then scan.
+				if (patternInput && patternInput.value.trim().length > 0 && selectedNumbers.size > 0) {
+					console.log('FancyMon: Find and Add All — no series yet; running Add New Only from current pattern + Y1/Y2, then buffer scan.');
+					addVariableToPlot();
+				}
+			}
+			if (plotVariables.length === 0) {
+				console.warn('FancyMon: Find and Add All — abort: no plot series. Paste a line in Pattern Input, select Y1/Y2, then click again (or use Add New Only first).');
+				return;
+			}
+			if (!rawLines || rawLines.length === 0) {
+				console.warn('FancyMon: Find and Add All — monitor buffer has no complete lines yet (need newline-terminated data).');
+				return;
+			}
+			let needsChart = false;
+			for (let i = 0; i < rawLines.length; i++) {
+				if (processLineForPlot(rawLines[i], { ignorePause: true, batchMode: true })) {
+					needsChart = true;
+				}
+			}
+			console.log('FancyMon: Find and Add All — scanned', rawLines.length, 'buffer lines; chart update:', needsChart);
+			if (needsChart && plotInitialized && plotDiv) {
 				updateChart();
 			}
-			
-			// Only update variables list occasionally (not every line)
-			// Update every 10 lines or when paused
-			if (isPlotPaused || (plotVariables.length > 0 && plotVariables[0].data.length % 10 === 0)) {
-				updateVariablesList();
-			}
+			updateVariablesList();
 		}
 
 		// Event listeners for plot controls
@@ -3159,6 +3280,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 		if (addVariableBtn) {
 			addVariableBtn.addEventListener('click', addVariableToPlot);
 		}
+		(function bindFindAndAddAllClick() {
+			const el = document.getElementById('findAndAddAllBtn');
+			if (el) {
+				el.addEventListener('click', function fancyMonFindAndAddAllClick() {
+					console.log('FancyMon: Find and Add All — mouse click received');
+					findAndAddAllMatchingFromBuffer();
+				});
+			} else {
+				console.error('FancyMon: #findAndAddAllBtn missing at init; Find and Add All cannot bind');
+			}
+		})();
 
 		if (clearPlotBtn) {
 			clearPlotBtn.addEventListener('click', () => {
@@ -3188,6 +3320,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				pausePlotBtn.textContent = isPlotPaused ? 'Resume' : 'Pause';
 			});
 		}
+
+		syncFindButtonToAddNewOnlyButton();
 
 		// Filter functions (inline for browser JavaScript)
 		function stripAnsiCodes(text) {
