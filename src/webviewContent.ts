@@ -177,29 +177,47 @@ export function getWebviewContentHtml(cspSource: string): string {
 			white-space: pre-wrap;
 			word-wrap: break-word;
 		}
-		.monitor-scroll-wrap {
+		/*
+			Split X/Y scroll: one element cannot hide native vertical (overlay / WebKit quirks) while keeping horizontal.
+			Outer: horizontal only + styled native bar. Inner (#monitorScrollWrap): vertical only; hide native bar (custom thumb).
+		*/
+		.monitor-x-scroll {
 			flex: 1 1 auto;
 			min-width: 0;
 			min-height: 0;
-			overflow-y: auto;
 			overflow-x: auto;
+			overflow-y: hidden;
 			padding: 10px 0 10px 10px;
 			box-sizing: border-box;
 		}
-		/* Hide only vertical scrollbar (custom one used); keep horizontal visible */
-		.monitor-scroll-wrap::-webkit-scrollbar {
-			width: 0;
+		.monitor-x-scroll::-webkit-scrollbar {
 			height: 12px;
+			width: 0 !important;
 		}
-		.monitor-scroll-wrap::-webkit-scrollbar-track {
+		.monitor-x-scroll::-webkit-scrollbar-track {
 			background: var(--vscode-scrollbarSlider-background);
 		}
-		.monitor-scroll-wrap::-webkit-scrollbar-thumb {
+		.monitor-x-scroll::-webkit-scrollbar-thumb {
 			background: var(--vscode-scrollbarSlider-activeBackground);
 			border-radius: 6px;
 		}
-		.monitor-scroll-wrap::-webkit-scrollbar-thumb:hover {
+		.monitor-x-scroll::-webkit-scrollbar-thumb:hover {
 			background: var(--vscode-scrollbarSlider-hoverBackground);
+		}
+		.monitor-scroll-wrap {
+			height: 100%;
+			min-height: 0;
+			overflow-y: auto;
+			overflow-x: hidden;
+			width: max-content;
+			min-width: 100%;
+			box-sizing: border-box;
+			/* Inner has only a vertical gutter — safe to hide entirely (custom scrollbar). */
+			scrollbar-width: none;
+		}
+		.monitor-scroll-wrap::-webkit-scrollbar {
+			width: 0 !important;
+			height: 0 !important;
 		}
 		.monitor-custom-scrollbar {
 			flex: 0 0 12px;
@@ -864,8 +882,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 	</div>
 
 	<div class="monitor" id="monitor">
+		<div class="monitor-x-scroll" id="monitorScrollOuter">
 		<div class="monitor-scroll-wrap" id="monitorScrollWrap">
 			<div id="monitorContent"></div>
+		</div>
 		</div>
 		<div class="monitor-custom-scrollbar" id="monitorCustomScrollbar">
 			<div class="scrollbar-event-ruler" id="scrollbarEventRuler"></div>
@@ -3963,10 +3983,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Add complete lines to raw storage
 			let linesAdded = lines.length;
+			let sawConnectedStatusLine = false;
 			for (const line of lines) {
 				const completeLine = line + newlineChar;
 				rawLines.push(completeLine);
 				lineCount++;
+				if (completeLine.includes('[[ CONNECTED ]]')) {
+					sawConnectedStatusLine = true;
+				}
 				if (completeLine.includes('[[ CONNECTED ]]') || completeLine.includes('[[ DISCONNECTED ]]') ||
 					completeLine.includes('[[ RESET SENT TO DEVICE ]]') || completeLine.includes('[[ PAUSED ') || completeLine.includes('[[ RESUMED ')) {
 					eventLineNumbers.push(lineCount);
@@ -3975,6 +3999,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 				if (!isStatusMessage) {
 					processLineForPlot(completeLine);
 				}
+			}
+
+			// Reconnect clears a bad "frozen / not following" state where appendData would skip DOM updates.
+			if (sawConnectedStatusLine) {
+				isFollowing = true;
+				anchorLostScrollTop = null;
+				unfreezeView();
+				needsFullRender = true;
+				lastRenderedLineIndex = -1;
 			}
 
 			// Trim old lines occasionally if we exceed max
@@ -4386,21 +4419,26 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 				monitorScrollWrap.addEventListener('scroll', handleScroll);
 				monitorScrollWrap.addEventListener('scroll', updateScrollThumb);
-				// Wheel-up must drop follow immediately; at ~20 lines/s scroll events can lag behind appendData's rAF scroll-to-bottom.
+				// Wheel-up drops follow before rAF scroll-to-bottom can run — but only when the log overflows and we're
+				// pinned to the tail. Otherwise a stray trackpad tick while the view is short sets !isFollowing and
+				// appendData's frozen path stops rendering new lines (buffer grows, UI stuck until reconnect).
 				monitorScrollWrap.addEventListener(
 					'wheel',
 					function fancyMonMonitorWheel(e) {
 						if (isProgrammaticScroll) return;
 						if (e.deltaY >= 0) return;
-						if (isFollowing) {
-							isFollowing = false;
-							anchorLostScrollTop = null;
-							if (!isFrozenView) {
-								freezeView();
-							}
-							needsFullRender = true;
-							lastRenderedLineIndex = -1;
+						if (!isFollowing) return;
+						const sh = monitorScrollWrap.scrollHeight;
+						const ch = monitorScrollWrap.clientHeight;
+						if (sh <= ch + 1) return;
+						if (!isPinnedToBottom()) return;
+						isFollowing = false;
+						anchorLostScrollTop = null;
+						if (!isFrozenView) {
+							freezeView();
 						}
+						needsFullRender = true;
+						lastRenderedLineIndex = -1;
 					},
 					{ passive: true }
 				);
