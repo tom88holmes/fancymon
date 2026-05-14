@@ -1603,6 +1603,23 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return yStr + ' @ ' + xStr;
 		}
 
+		// Line + solid circle markers (shared by newPlot / addTraces)
+		function fancyMonPlotTraceLineAndMarkers(color) {
+			return {
+				mode: 'lines+markers',
+				line: {
+					color: color,
+					width: 2
+				},
+				marker: {
+					size: 5,
+					color: color,
+					symbol: 'circle',
+					line: { width: 0 }
+				}
+			};
+		}
+
 		// Initialize Plotly.js
 		function initializeChart() {
 			if (!plotDiv || typeof Plotly === 'undefined') {
@@ -1620,24 +1637,23 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const hoverTemplateEmpty = '<extra></extra>';
 
 			// Prepare data traces from existing variables
-			const traces = plotVariables.map(variable => ({
-				x: variable.data.map(d => d.time),
-				y: variable.data.map(d => d.value),
-				name: variable.name,
-				yaxis: variable.axis === 'y2' ? 'y2' : 'y',
-				legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
-				showlegend: false,
-				visible: variable.visible !== false,
-				type: 'scatter',
-				mode: 'lines',
-				line: {
-					color: variable.color,
-					width: 2
-				},
-				hovertemplate: hoverTemplateEmpty,
-				// No native tooltip (values shown in custom legend); hover events still fire for legend
-				hoverinfo: 'none'
-			}));
+			const traces = plotVariables.map(variable =>
+				Object.assign(
+					{
+						x: variable.data.map(d => d.time),
+						y: variable.data.map(d => d.value),
+						name: variable.name,
+						yaxis: variable.axis === 'y2' ? 'y2' : 'y',
+						legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
+						showlegend: false,
+						visible: variable.visible !== false,
+						type: 'scatter',
+						hovertemplate: hoverTemplateEmpty,
+						hoverinfo: 'none'
+					},
+					fancyMonPlotTraceLineAndMarkers(variable.color)
+				)
+			);
 
 			const layout = {
 				title: {
@@ -2441,23 +2457,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 					initializeChart();
 				} else if (plotInitialized) {
 					// Add new trace to existing plot
-					const newTrace = {
-						x: [],
-						y: [],
-						name: variable.name,
-						yaxis: axisKey === 'y2' ? 'y2' : 'y',
-						legendgroup: axisKey === 'y2' ? 'y2' : 'y1',
-						showlegend: false,
-						visible: variable.visible !== false,
-						type: 'scatter',
-						mode: 'lines',
-						line: {
-							color: color,
-							width: 2
+					const newTrace = Object.assign(
+						{
+							x: [],
+							y: [],
+							name: variable.name,
+							yaxis: axisKey === 'y2' ? 'y2' : 'y',
+							legendgroup: axisKey === 'y2' ? 'y2' : 'y1',
+							showlegend: false,
+							visible: variable.visible !== false,
+							type: 'scatter',
+							hovertemplate: '<extra></extra>',
+							hoverinfo: 'none'
 						},
-						hovertemplate: '<extra></extra>',
-						hoverinfo: 'none'
-					};
+						fancyMonPlotTraceLineAndMarkers(color)
+					);
 					Plotly.addTraces(plotDiv, newTrace);
 				}
 			});
@@ -3032,23 +3046,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 							if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
 								initializeChart();
 							} else if (plotInitialized) {
-								const newTrace = {
-									x: [],
-									y: [],
-									name: variable.name,
-									yaxis: variable.axis === 'y2' ? 'y2' : 'y',
-									legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
-									showlegend: false,
-									visible: variable.visible !== false,
-									type: 'scatter',
-									mode: 'lines',
-									line: {
-										color: variable.color,
-										width: 2
+								const newTrace = Object.assign(
+									{
+										x: [],
+										y: [],
+										name: variable.name,
+										yaxis: variable.axis === 'y2' ? 'y2' : 'y',
+										legendgroup: variable.axis === 'y2' ? 'y2' : 'y1',
+										showlegend: false,
+										visible: variable.visible !== false,
+										type: 'scatter',
+										hovertemplate: '<extra></extra>',
+										hoverinfo: 'none'
 									},
-									hovertemplate: '<extra></extra>',
-									hoverinfo: 'none'
-								};
+									fancyMonPlotTraceLineAndMarkers(variable.color)
+								);
 								Plotly.addTraces(plotDiv, newTrace);
 							}
 						});
