@@ -63,6 +63,44 @@ export function getWebviewContentHtml(cspSource: string): string {
 			align-items: center;
 		}
 
+		.uart-advanced-controls {
+			display: contents;
+		}
+
+		.uart-advanced-controls.is-collapsed {
+			display: none;
+		}
+
+		button.uart-settings-toggle {
+			min-width: 32px;
+			width: 32px;
+			height: 26px;
+			padding: 4px;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			background-color: var(--vscode-button-secondaryBackground);
+			border: 1px solid var(--vscode-button-border, transparent);
+			border-radius: 2px;
+			cursor: pointer;
+			color: #ffffff;
+		}
+
+		button.uart-settings-toggle:hover {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+
+		button.uart-settings-toggle.active {
+			background-color: var(--vscode-button-background);
+		}
+
+		button.uart-settings-toggle .cog-icon {
+			width: 18px;
+			height: 18px;
+			display: block;
+			flex-shrink: 0;
+		}
+
 		.controls-row {
 			display: flex;
 			gap: 10px;
@@ -310,6 +348,99 @@ export function getWebviewContentHtml(cspSource: string): string {
 			height: 2px;
 			background: #9ca3af;
 			pointer-events: none;
+		}
+		.monitor-custom-scrollbar .scrollbar-search-ruler {
+			position: absolute;
+			left: 0;
+			width: 100%;
+			background: transparent;
+			pointer-events: none;
+			z-index: 1;
+		}
+		.monitor-custom-scrollbar .scrollbar-search-mark {
+			position: absolute;
+			left: 0;
+			width: 100%;
+			height: 2px;
+			background: #6ec1ff;
+			pointer-events: none;
+		}
+		.search-control-inner {
+			display: flex;
+			flex: 1;
+			align-items: center;
+			gap: 4px;
+			min-width: 0;
+		}
+		.search-nav-btn {
+			flex: 0 0 auto;
+			width: 26px;
+			height: 26px;
+			padding: 0;
+			font-size: 11px;
+			line-height: 1;
+			cursor: pointer;
+			background-color: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-button-secondaryForeground);
+			border: 1px solid var(--vscode-button-border, transparent);
+			border-radius: 2px;
+		}
+		.search-nav-btn:hover:not(:disabled) {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+		.search-nav-btn:disabled {
+			opacity: 0.45;
+			cursor: not-allowed;
+		}
+		.search-match-status {
+			flex: 0 0 auto;
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+			white-space: nowrap;
+			min-width: 4.5em;
+			text-align: right;
+		}
+		.monitor .search-highlight {
+			background-color: rgba(100, 180, 255, 0.45);
+			border-radius: 2px;
+		}
+		.monitor .search-highlight-current {
+			background-color: rgba(100, 180, 255, 0.85);
+			outline: 1px solid #6ec1ff;
+		}
+		.filter-controls-row {
+			align-items: center;
+		}
+		.filter-case-toggle {
+			flex: 0 0 auto;
+			align-self: center;
+			width: 32px;
+			height: 26px;
+			padding: 0;
+			font-size: 12px;
+			font-weight: 600;
+			line-height: 1;
+			cursor: pointer;
+			background-color: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-descriptionForeground);
+			border: 1px solid var(--vscode-button-border, transparent);
+			border-radius: 2px;
+		}
+		.filter-case-toggle:hover {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+		.filter-case-toggle.active {
+			background-color: var(--vscode-button-background);
+			color: var(--vscode-button-foreground);
+			border-color: var(--vscode-focusBorder, var(--vscode-button-background));
+		}
+		.filter-controls-columns {
+			display: flex;
+			flex: 1;
+			gap: 10px;
+			min-width: 0;
+			flex-wrap: wrap;
+			align-items: center;
 		}
 		.monitor-custom-scrollbar .scrollbar-thumb {
 			position: absolute;
@@ -863,8 +994,25 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<option value="">Select port...</option>
 			</select>
 			<button id="refreshPorts">Refresh</button>
+			<button type="button" id="toggleUartSettingsBtn" class="uart-settings-toggle" title="Show UART settings" aria-pressed="false" aria-label="Show UART settings">
+				<svg class="cog-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/>
+				</svg>
+			</button>
 		</div>
-		
+
+		<button id="sendResetBtn" disabled>Send Reset</button>
+		<button id="connectToggleBtn" class="success">Connect</button>
+		<div class="control-group">
+			<label>Max Lines:</label>
+			<input type="number" id="maxLines" value="10000" min="100" max="1000000" style="width: 100px;">
+		</div>
+		<div class="control-group">
+			<label>Usage:</label>
+			<span id="lineUsage" style="color: var(--vscode-descriptionForeground); font-size: 12px;">0% (0 / 10000)</span>
+		</div>
+
+		<div id="uartAdvancedControls" class="uart-advanced-controls is-collapsed">
 		<div class="control-group">
 			<label>Baud Rate:</label>
 			<select id="baudRate">
@@ -906,9 +1054,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<option value="odd">Odd</option>
 			</select>
 		</div>
-
-		<button id="sendResetBtn" disabled>Send Reset</button>
-		<button id="connectToggleBtn" class="success">Connect</button>
+		</div>
 	</div>
 
 	<div class="controls-row">
@@ -921,23 +1067,29 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<path class="clock-hands" d="M10 5.2v4.6l3.2 2.3"></path>
 			</svg>
 		</button>
-		<div class="control-group">
-			<label>Max Lines:</label>
-			<input type="number" id="maxLines" value="10000" min="100" max="1000000" style="width: 100px;">
-		</div>
-		<div class="control-group">
-			<label>Usage:</label>
-			<span id="lineUsage" style="color: var(--vscode-descriptionForeground); font-size: 12px;">0% (0 / 10000)</span>
-		</div>
 		<button id="saveBtn">Save to File</button>
 		<button id="copyAllBtn">Copy All</button>
 		<button id="copyFilteredBtn">Copy All Filtered</button>
 		<button id="copyVisibleBtn">Copy All Visible</button>
 		<button id="selectElfBtn" title="Load ELF File">Load ELF File</button>
-		<button id="testBacktraceBtn" title="Simulate Backtrace Data">Test</button>
 	</div>
 
-	<div class="controls-row">
+	<div class="controls-row filter-controls-row">
+		<button type="button" id="toggleCaseSensitiveBtn" class="filter-case-toggle" title="Case sensitive matching disabled (click to enable)" aria-pressed="false">Aa</button>
+		<div class="filter-controls-columns">
+		<div class="control-group search-control-group" style="flex: 1;">
+			<label>Search:</label>
+			<div class="search-control-inner">
+				<div class="filter-input-wrapper" style="flex: 1; position: relative; display: flex; z-index: 1001; overflow: visible; min-width: 0;">
+					<button id="searchHistoryBtn" class="history-btn" title="Search history">▼</button>
+					<input type="text" id="searchInput" placeholder="Search visible log..." style="flex: 1; min-width: 120px; border-left: none; border-radius: 0 2px 2px 0;">
+					<div id="searchHistoryDropdown" class="history-dropdown filter-dropdown" style="display: none;"></div>
+				</div>
+				<button id="searchPrevBtn" class="search-nav-btn" title="Previous match (Shift+Enter)" disabled>▲</button>
+				<button id="searchNextBtn" class="search-nav-btn" title="Next match (Enter)" disabled>▼</button>
+				<span id="searchMatchStatus" class="search-match-status">0 matches</span>
+			</div>
+		</div>
 		<div class="control-group" style="flex: 1;">
 			<label>Include:</label>
 			<div class="filter-input-wrapper" style="flex: 1; position: relative; display: flex; z-index: 1001; overflow: visible;">
@@ -954,6 +1106,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<div id="excludeHistoryDropdown" class="history-dropdown filter-dropdown" style="display: none;"></div>
 			</div>
 		</div>
+		</div>
 	</div>
 
 	<div class="monitor" id="monitor">
@@ -964,6 +1117,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		</div>
 		<div class="monitor-custom-scrollbar" id="monitorCustomScrollbar">
 			<div class="scrollbar-event-ruler" id="scrollbarEventRuler"></div>
+			<div class="scrollbar-search-ruler" id="scrollbarSearchRuler"></div>
 			<div class="scrollbar-thumb" id="monitorScrollThumb"></div>
 			<div class="scrollbar-indicator" id="scrollbarIndicator"></div>
 		</div>
@@ -1106,6 +1260,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const historyBtn = document.getElementById('historyBtn');
 		const historyDropdown = document.getElementById('historyDropdown');
 		const refreshPorts = document.getElementById('refreshPorts');
+		const toggleUartSettingsBtn = document.getElementById('toggleUartSettingsBtn');
+		const uartAdvancedControls = document.getElementById('uartAdvancedControls');
+		let uartAdvancedVisible = false;
 		// status already declared above
 		const maxLinesInput = document.getElementById('maxLines');
 		const lineUsage = document.getElementById('lineUsage');
@@ -1114,13 +1271,19 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const copyFilteredBtn = document.getElementById('copyFilteredBtn');
 		const copyVisibleBtn = document.getElementById('copyVisibleBtn');
 		const scrollbarIndicator = document.getElementById('scrollbarIndicator');
+		const searchInput = document.getElementById('searchInput');
+		const searchHistoryBtn = document.getElementById('searchHistoryBtn');
+		const searchHistoryDropdown = document.getElementById('searchHistoryDropdown');
+		const searchPrevBtn = document.getElementById('searchPrevBtn');
+		const searchNextBtn = document.getElementById('searchNextBtn');
+		const searchMatchStatus = document.getElementById('searchMatchStatus');
+		const toggleCaseSensitiveBtn = document.getElementById('toggleCaseSensitiveBtn');
 		const filterInput = document.getElementById('filterInput');
 		const excludeFilterInput = document.getElementById('excludeFilterInput');
 		const includeHistoryBtn = document.getElementById('includeHistoryBtn');
 		const excludeHistoryBtn = document.getElementById('excludeHistoryBtn');
 		const includeHistoryDropdown = document.getElementById('includeHistoryDropdown');
 		const excludeHistoryDropdown = document.getElementById('excludeHistoryDropdown');
-		const testBacktraceBtn = document.getElementById('testBacktraceBtn');
 		const timePatternHistoryBtn = document.getElementById('timePatternHistoryBtn');
 		const timePatternHistoryDropdown = document.getElementById('timePatternHistoryDropdown');
 		const timePatternHint = document.getElementById('timePatternHint');
@@ -1140,7 +1303,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 		// Filter history (most recent first, max 30 items)
 		let includeFilterHistory = [];
 		let excludeFilterHistory = [];
+		let searchHistory = [];
 		const MAX_FILTER_HISTORY = 30;
+		let searchPattern = '';
+		let searchMatches = [];
+		let currentSearchMatchIndex = -1;
+		let selectedSearchHistoryIndex = -1;
+		let searchDebounceTimer = null;
+		let searchRefreshTimer = null;
+		const SEARCH_HISTORY_DEBOUNCE_MS = 5000;
 		let selectedIncludeHistoryIndex = -1;
 		let selectedExcludeHistoryIndex = -1;
 
@@ -1190,6 +1361,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let rawLines = [];
 		let filterPattern = ''; // Include filter pattern for dynamic filtering
 		let excludeFilterPattern = ''; // Exclude filter pattern for dynamic filtering
+		let filterCaseSensitive = false; // Case sensitivity for search, include, and exclude
 		let lastExcludeFilterPattern = ''; // Last exclude filter pattern used for rendering
 		const newlineChar = String.fromCharCode(10);
 		
@@ -4460,6 +4632,16 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 		}
 		
+		function textContainsPattern(haystack, needle) {
+			if (!needle) {
+				return false;
+			}
+			if (filterCaseSensitive) {
+				return haystack.indexOf(needle) >= 0;
+			}
+			return haystack.toLowerCase().indexOf(needle.toLowerCase()) >= 0;
+		}
+
 		function applyFilter(entries, includePattern, excludePattern) {
 			let filtered = entries;
 			
@@ -4470,7 +4652,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					filtered = filtered.filter(entry => {
 						const plainText = stripAnsiCodes(entry.text);
 						// Line must match at least one include pattern
-						return includePatterns.some(pattern => plainText.includes(pattern));
+						return includePatterns.some(pattern => textContainsPattern(plainText, pattern));
 					});
 				}
 			}
@@ -4482,7 +4664,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 					filtered = filtered.filter(entry => {
 						const plainText = stripAnsiCodes(entry.text);
 						// Line must not match any exclude pattern
-						return !excludePatterns.some(pattern => plainText.includes(pattern));
+						return !excludePatterns.some(pattern => textContainsPattern(plainText, pattern));
 					});
 				}
 			}
@@ -4494,13 +4676,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const plainText = stripAnsiCodes(lineText || '');
 			if (includePattern && includePattern.trim() !== '') {
 				const includePatterns = includePattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
-				if (includePatterns.length > 0 && !includePatterns.some(pattern => plainText.includes(pattern))) {
+				if (includePatterns.length > 0 && !includePatterns.some(pattern => textContainsPattern(plainText, pattern))) {
 					return false;
 				}
 			}
 			if (excludePattern && excludePattern.trim() !== '') {
 				const excludePatterns = excludePattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
-				if (excludePatterns.length > 0 && excludePatterns.some(pattern => plainText.includes(pattern))) {
+				if (excludePatterns.length > 0 && excludePatterns.some(pattern => textContainsPattern(plainText, pattern))) {
 					return false;
 				}
 			}
@@ -4978,6 +5160,309 @@ export function getWebviewContentHtml(cspSource: string): string {
 			updateScrollThumb();
 		}
 
+		function getSearchTerms(pattern) {
+			if (!pattern || pattern.trim() === '') {
+				return [];
+			}
+			return pattern.split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0; });
+		}
+
+		function plainTextMatchesSearchTerms(plainText, terms) {
+			if (!terms.length) {
+				return false;
+			}
+			for (let i = 0; i < terms.length; i++) {
+				if (textContainsPattern(plainText, terms[i])) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		function mergeSearchMatchRanges(ranges) {
+			if (!ranges.length) {
+				return [];
+			}
+			ranges.sort(function (a, b) { return a.start - b.start; });
+			const merged = [ranges[0]];
+			for (let i = 1; i < ranges.length; i++) {
+				const last = merged[merged.length - 1];
+				const cur = ranges[i];
+				if (cur.start <= last.end) {
+					last.end = Math.max(last.end, cur.end);
+				} else {
+					merged.push(cur);
+				}
+			}
+			return merged;
+		}
+
+		function findSearchMatchRangesInText(text, terms) {
+			const ranges = [];
+			const haystack = filterCaseSensitive ? text : text.toLowerCase();
+			for (let t = 0; t < terms.length; t++) {
+				const term = terms[t];
+				const needle = filterCaseSensitive ? term : term.toLowerCase();
+				let idx = 0;
+				while (idx < haystack.length) {
+					const found = haystack.indexOf(needle, idx);
+					if (found < 0) {
+						break;
+					}
+					ranges.push({ start: found, end: found + term.length });
+					idx = found + (term.length || 1);
+				}
+			}
+			return mergeSearchMatchRanges(ranges);
+		}
+
+		function unwrapSearchHighlights(root) {
+			if (!root) {
+				return;
+			}
+			const highlights = root.querySelectorAll('.search-highlight');
+			for (let i = highlights.length - 1; i >= 0; i--) {
+				const span = highlights[i];
+				const parent = span.parentNode;
+				if (!parent) {
+					continue;
+				}
+				while (span.firstChild) {
+					parent.insertBefore(span.firstChild, span);
+				}
+				parent.removeChild(span);
+			}
+		}
+
+		function wrapTextNodeSubstring(textNode, localStart, localEnd, lineEl, matchList) {
+			const text = textNode.textContent || '';
+			const fragment = document.createDocumentFragment();
+			if (localStart > 0) {
+				fragment.appendChild(document.createTextNode(text.slice(0, localStart)));
+			}
+			const span = document.createElement('span');
+			span.className = 'search-highlight';
+			span.textContent = text.slice(localStart, localEnd);
+			fragment.appendChild(span);
+			matchList.push({ lineEl: lineEl, span: span });
+			if (localEnd < text.length) {
+				fragment.appendChild(document.createTextNode(text.slice(localEnd)));
+			}
+			textNode.parentNode.replaceChild(fragment, textNode);
+		}
+
+		function collectLineTextSegments(lineEl) {
+			let fullText = '';
+			const segments = [];
+			const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+			let node = walker.nextNode();
+			while (node) {
+				if (node.parentElement && node.parentElement.closest('.search-highlight')) {
+					node = walker.nextNode();
+					continue;
+				}
+				const text = node.textContent || '';
+				if (text.length > 0) {
+					segments.push({
+						node: node,
+						start: fullText.length,
+						end: fullText.length + text.length
+					});
+					fullText += text;
+				}
+				node = walker.nextNode();
+			}
+			return { fullText: fullText, segments: segments };
+		}
+
+		function applySearchRangeToLine(lineEl, range, matchList) {
+			const collected = collectLineTextSegments(lineEl);
+			const parts = [];
+			for (let i = 0; i < collected.segments.length; i++) {
+				const seg = collected.segments[i];
+				if (range.start >= seg.end || range.end <= seg.start) {
+					continue;
+				}
+				const localStart = Math.max(0, range.start - seg.start);
+				const localEnd = Math.min(seg.end - seg.start, range.end - seg.start);
+				parts.push({ node: seg.node, localStart: localStart, localEnd: localEnd });
+			}
+			// Apply end-to-start so earlier text node references stay valid
+			for (let p = parts.length - 1; p >= 0; p--) {
+				const part = parts[p];
+				wrapTextNodeSubstring(part.node, part.localStart, part.localEnd, lineEl, matchList);
+			}
+		}
+
+		function applySearchHighlightsToLine(lineEl, terms, matchList) {
+			if (!lineEl || !terms.length) {
+				return;
+			}
+			unwrapSearchHighlights(lineEl);
+			const collected = collectLineTextSegments(lineEl);
+			if (!collected.fullText) {
+				return;
+			}
+			const ranges = findSearchMatchRangesInText(collected.fullText, terms);
+			if (!ranges.length) {
+				return;
+			}
+			// Apply from end of line toward start so DOM splits don't invalidate offsets
+			ranges.sort(function (a, b) { return b.start - a.start; });
+			for (let r = 0; r < ranges.length; r++) {
+				applySearchRangeToLine(lineEl, ranges[r], matchList);
+			}
+		}
+
+		function updateSearchMatchStatusText() {
+			if (!searchMatchStatus) {
+				return;
+			}
+			const terms = getSearchTerms(searchPattern);
+			if (!terms.length || searchMatches.length === 0) {
+				searchMatchStatus.textContent = '0 matches';
+			} else if (currentSearchMatchIndex < 0) {
+				searchMatchStatus.textContent = searchMatches.length + ' matches';
+			} else {
+				searchMatchStatus.textContent = (currentSearchMatchIndex + 1) + ' of ' + searchMatches.length;
+			}
+			const hasMatches = terms.length > 0 && searchMatches.length > 0;
+			if (searchPrevBtn) {
+				searchPrevBtn.disabled = !hasMatches;
+			}
+			if (searchNextBtn) {
+				searchNextBtn.disabled = !hasMatches;
+			}
+		}
+
+		function highlightCurrentSearchMatch() {
+			if (!monitorContent) {
+				return;
+			}
+			const all = monitorContent.querySelectorAll('.search-highlight');
+			for (let i = 0; i < all.length; i++) {
+				all[i].classList.remove('search-highlight-current');
+			}
+			if (currentSearchMatchIndex >= 0 && currentSearchMatchIndex < searchMatches.length) {
+				const current = searchMatches[currentSearchMatchIndex];
+				if (current && current.span) {
+					current.span.classList.add('search-highlight-current');
+				}
+			}
+			updateSearchMatchStatusText();
+		}
+
+		function scrollToSearchMatch(match) {
+			if (!match || !match.span || !monitorScrollWrap) {
+				return;
+			}
+			isProgrammaticScroll = true;
+			const spanRect = match.span.getBoundingClientRect();
+			const wrapRect = monitorScrollWrap.getBoundingClientRect();
+			const spanTop = spanRect.top - wrapRect.top + monitorScrollWrap.scrollTop;
+			const target = spanTop - monitorScrollWrap.clientHeight / 2 + spanRect.height / 2;
+			const maxScroll = Math.max(0, monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight);
+			monitorScrollWrap.scrollTop = Math.max(0, Math.min(target, maxScroll));
+			lastScrollTop = monitorScrollWrap.scrollTop;
+			setTimeout(function () {
+				isProgrammaticScroll = false;
+			}, 50);
+		}
+
+		function goToSearchMatch(direction) {
+			if (!searchMatches.length) {
+				return;
+			}
+			if (currentSearchMatchIndex < 0) {
+				currentSearchMatchIndex = direction > 0 ? 0 : searchMatches.length - 1;
+			} else {
+				currentSearchMatchIndex = (currentSearchMatchIndex + direction + searchMatches.length) % searchMatches.length;
+			}
+			highlightCurrentSearchMatch();
+			scrollToSearchMatch(searchMatches[currentSearchMatchIndex]);
+		}
+
+		function computeSearchMatchLineNumbers(terms) {
+			const lineNumbers = [];
+			if (!terms.length || rawLines.length === 0) {
+				return lineNumbers;
+			}
+			for (let idx = 0; idx < rawLines.length; idx++) {
+				const line = rawLines[idx];
+				if (!lineMatchesActiveFilter(line, filterPattern, excludeFilterPattern)) {
+					continue;
+				}
+				const plainText = stripAnsiCodes(line.endsWith(newlineChar) ? line.slice(0, -1) : line);
+				if (plainTextMatchesSearchTerms(plainText, terms)) {
+					lineNumbers.push(totalTrimmedLines + idx + 1);
+				}
+			}
+			return lineNumbers;
+		}
+
+		function updateScrollbarSearchMarks() {
+			const ruler = document.getElementById('scrollbarSearchRuler');
+			if (!monitor || !ruler || !monitorScrollWrap) {
+				return;
+			}
+			const terms = getSearchTerms(searchPattern);
+			ruler.innerHTML = '';
+			if (!terms.length || rawLines.length === 0) {
+				return;
+			}
+			const trackHeight = monitorScrollWrap.clientHeight;
+			ruler.style.height = trackHeight + 'px';
+			ruler.style.top = '0';
+			const matchLines = computeSearchMatchLineNumbers(terms);
+			for (let i = 0; i < matchLines.length; i++) {
+				const lineNum = matchLines[i];
+				const topPercent = ((lineNum - totalTrimmedLines - 1) / rawLines.length) * 100;
+				const mark = document.createElement('div');
+				mark.className = 'scrollbar-search-mark';
+				mark.style.top = topPercent + '%';
+				ruler.appendChild(mark);
+			}
+		}
+
+		function refreshSearchDisplay() {
+			if (!monitorContent) {
+				return;
+			}
+			const terms = getSearchTerms(searchPattern);
+			unwrapSearchHighlights(monitorContent);
+			searchMatches = [];
+			if (!terms.length) {
+				currentSearchMatchIndex = -1;
+				updateScrollbarSearchMarks();
+				updateSearchMatchStatusText();
+				return;
+			}
+			const lines = monitorContent.querySelectorAll('.line');
+			for (let i = 0; i < lines.length; i++) {
+				applySearchHighlightsToLine(lines[i], terms, searchMatches);
+			}
+			if (currentSearchMatchIndex >= searchMatches.length) {
+				currentSearchMatchIndex = searchMatches.length > 0 ? searchMatches.length - 1 : -1;
+			}
+			highlightCurrentSearchMatch();
+			updateScrollbarSearchMarks();
+		}
+
+		function scheduleSearchRefresh() {
+			if (searchRefreshTimer) {
+				clearTimeout(searchRefreshTimer);
+			}
+			searchRefreshTimer = setTimeout(function () {
+				searchRefreshTimer = null;
+				refreshSearchDisplay();
+			}, 30);
+		}
+
+		function afterMonitorContentUpdate() {
+			updateScrollbarEventMarks();
+			scheduleSearchRefresh();
+		}
+
 		function updateScrollThumb() {
 			const track = document.getElementById('monitorCustomScrollbar');
 			const thumb = document.getElementById('monitorScrollThumb');
@@ -5335,7 +5820,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Update tracking
 			lastRenderedLineIndex = endIndex - 1;
 			currentAnsiState = state;
-			updateScrollbarEventMarks();
+			afterMonitorContentUpdate();
 			scrollMonitorToBottomIfFollowing();
 		}
 
@@ -5382,12 +5867,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 				currentAnsiState = state;
 			} else if (lineBuffer) {
 				updateFilteredBufferLine();
-				updateScrollbarEventMarks();
+				afterMonitorContentUpdate();
 				return;
 			}
 
 			updateFilteredBufferLine();
-			updateScrollbarEventMarks();
+			afterMonitorContentUpdate();
 			scrollMonitorToBottomIfFollowing();
 		}
 		
@@ -5573,7 +6058,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Update scrollbar indicator if view is frozen
 			updateScrollbarIndicator();
-			updateScrollbarEventMarks();
+			afterMonitorContentUpdate();
 		}
 
 		// Monitor scroll events to detect when user scrolls up/down
@@ -5858,6 +6343,31 @@ export function getWebviewContentHtml(cspSource: string): string {
 			status.className = 'status ' + type;
 		}
 
+		function applyUartAdvancedVisibility() {
+			if (!uartAdvancedControls || !toggleUartSettingsBtn) {
+				return;
+			}
+			if (uartAdvancedVisible) {
+				uartAdvancedControls.classList.remove('is-collapsed');
+				toggleUartSettingsBtn.classList.add('active');
+				toggleUartSettingsBtn.setAttribute('aria-pressed', 'true');
+				toggleUartSettingsBtn.title = 'Hide UART settings';
+			} else {
+				uartAdvancedControls.classList.add('is-collapsed');
+				toggleUartSettingsBtn.classList.remove('active');
+				toggleUartSettingsBtn.setAttribute('aria-pressed', 'false');
+				toggleUartSettingsBtn.title = 'Show UART settings';
+			}
+		}
+
+		if (toggleUartSettingsBtn) {
+			toggleUartSettingsBtn.addEventListener('click', function () {
+				uartAdvancedVisible = !uartAdvancedVisible;
+				applyUartAdvancedVisibility();
+			});
+		}
+		applyUartAdvancedVisibility();
+
 		refreshPorts.addEventListener('click', () => {
 			vscode.postMessage({ command: 'listPorts' });
 		});
@@ -5977,8 +6487,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 			unfreezeView();
 			lastRenderedLineIndex = -1; // Reset render tracking
 			needsFullRender = false;
+			searchPattern = '';
+			searchMatches = [];
+			currentSearchMatchIndex = -1;
+			if (searchInput) {
+				searchInput.value = '';
+			}
 			updateLineUsage();
-			updateScrollbarEventMarks();
+			afterMonitorContentUpdate();
 			vscode.postMessage({ command: 'clear' });
 		});
 
@@ -6040,10 +6556,100 @@ export function getWebviewContentHtml(cspSource: string): string {
 			});
 		}
 
-		if (testBacktraceBtn) {
-			testBacktraceBtn.addEventListener('click', () => {
-				console.log('FancyMon: Test button clicked!');
-				vscode.postMessage({ command: 'testBacktrace' });
+		function applyFilterCaseSensitiveState() {
+			if (!toggleCaseSensitiveBtn) {
+				return;
+			}
+			if (filterCaseSensitive) {
+				toggleCaseSensitiveBtn.classList.add('active');
+				toggleCaseSensitiveBtn.setAttribute('aria-pressed', 'true');
+				toggleCaseSensitiveBtn.title = 'Case sensitive matching enabled (click to disable)';
+			} else {
+				toggleCaseSensitiveBtn.classList.remove('active');
+				toggleCaseSensitiveBtn.setAttribute('aria-pressed', 'false');
+				toggleCaseSensitiveBtn.title = 'Case sensitive matching disabled (click to enable)';
+			}
+		}
+
+		function onFilterCaseSensitiveChanged() {
+			applyFilterCaseSensitiveState();
+			currentSearchMatchIndex = -1;
+			needsFullRender = true;
+			lastRenderedLineIndex = -1;
+			renderLinesWithBuffer();
+		}
+
+		if (toggleCaseSensitiveBtn) {
+			toggleCaseSensitiveBtn.addEventListener('click', function () {
+				filterCaseSensitive = !filterCaseSensitive;
+				vscode.postMessage({
+					command: 'updateFilterCaseSensitiveState',
+					filterCaseSensitive: filterCaseSensitive
+				});
+				onFilterCaseSensitiveChanged();
+			});
+		}
+
+		// Search input event listener
+		if (searchInput) {
+			searchInput.addEventListener('input', () => {
+				const newPattern = searchInput.value;
+				searchPattern = newPattern;
+				currentSearchMatchIndex = -1;
+				scheduleSearchRefresh();
+
+				if (searchDebounceTimer) {
+					clearTimeout(searchDebounceTimer);
+				}
+				searchDebounceTimer = setTimeout(function () {
+					if (searchPattern && searchPattern.trim() !== '') {
+						addToSearchHistory(searchPattern);
+					}
+					searchDebounceTimer = null;
+				}, SEARCH_HISTORY_DEBOUNCE_MS);
+			});
+
+			searchInput.addEventListener('keydown', function (e) {
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					navigateSearchHistory('up');
+				} else if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					navigateSearchHistory('down');
+				} else if (e.key === 'Enter') {
+					e.preventDefault();
+					if (selectedSearchHistoryIndex >= 0 && searchHistoryDropdown && searchHistoryDropdown.style.display === 'block') {
+						selectSearchHistoryItem(selectedSearchHistoryIndex);
+					} else if (e.shiftKey) {
+						goToSearchMatch(-1);
+					} else {
+						goToSearchMatch(1);
+					}
+				} else if (e.key === 'Escape') {
+					if (searchHistoryDropdown && searchHistoryDropdown.style.display === 'block') {
+						searchHistoryDropdown.style.display = 'none';
+						selectedSearchHistoryIndex = -1;
+					}
+				}
+			});
+		}
+
+		if (searchPrevBtn) {
+			searchPrevBtn.addEventListener('click', function () {
+				goToSearchMatch(-1);
+			});
+		}
+
+		if (searchNextBtn) {
+			searchNextBtn.addEventListener('click', function () {
+				goToSearchMatch(1);
+			});
+		}
+
+		if (searchHistoryBtn) {
+			searchHistoryBtn.addEventListener('click', function (e) {
+				e.stopPropagation();
+				toggleSearchHistoryDropdown();
 			});
 		}
 
@@ -6438,6 +7044,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			    !timePatternInput.contains(e.target)) {
 				timePatternHistoryDropdown.style.display = 'none';
 			}
+			if (searchHistoryDropdown && searchHistoryBtn &&
+			    !searchHistoryDropdown.contains(e.target) &&
+			    !searchHistoryBtn.contains(e.target) &&
+			    searchInput && !searchInput.contains(e.target)) {
+				searchHistoryDropdown.style.display = 'none';
+			}
 		});
 
 		// Time pattern history management functions (mirrors filter history UX)
@@ -6574,6 +7186,109 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 		}
 		
+		// Search history management functions
+		function addToSearchHistory(query) {
+			if (!query || query.trim() === '') {
+				return;
+			}
+			const trimmed = query.trim();
+			const index = searchHistory.indexOf(trimmed);
+			if (index > -1) {
+				searchHistory.splice(index, 1);
+			}
+			searchHistory.unshift(trimmed);
+			if (searchHistory.length > MAX_FILTER_HISTORY) {
+				searchHistory = searchHistory.slice(0, MAX_FILTER_HISTORY);
+			}
+			vscode.postMessage({ command: 'updateSearchHistory', history: searchHistory });
+		}
+
+		function renderSearchHistoryDropdown() {
+			if (!searchHistoryDropdown) {
+				return;
+			}
+			searchHistoryDropdown.innerHTML = '';
+			selectedSearchHistoryIndex = -1;
+			if (searchHistory.length === 0) {
+				const emptyItem = document.createElement('div');
+				emptyItem.className = 'history-item empty';
+				emptyItem.textContent = 'No history';
+				searchHistoryDropdown.appendChild(emptyItem);
+			} else {
+				searchHistory.forEach(function (query, index) {
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					item.setAttribute('data-index', index.toString());
+					item.textContent = query;
+					item.title = query;
+					item.addEventListener('click', function () {
+						selectSearchHistoryItem(index);
+					});
+					item.addEventListener('mouseenter', function () {
+						selectedSearchHistoryIndex = index;
+						updateSearchHistorySelection();
+					});
+					searchHistoryDropdown.appendChild(item);
+				});
+			}
+		}
+
+		function updateSearchHistorySelection() {
+			if (!searchHistoryDropdown) {
+				return;
+			}
+			const items = searchHistoryDropdown.querySelectorAll('.history-item:not(.empty)');
+			items.forEach(function (item, index) {
+				if (index === selectedSearchHistoryIndex) {
+					item.classList.add('selected');
+					item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				} else {
+					item.classList.remove('selected');
+				}
+			});
+		}
+
+		function selectSearchHistoryItem(index) {
+			if (index >= 0 && index < searchHistory.length && searchInput) {
+				searchInput.value = searchHistory[index];
+				searchPattern = searchHistory[index];
+				currentSearchMatchIndex = -1;
+				if (searchHistoryDropdown) {
+					searchHistoryDropdown.style.display = 'none';
+				}
+				selectedSearchHistoryIndex = -1;
+				searchInput.focus();
+				scheduleSearchRefresh();
+			}
+		}
+
+		function navigateSearchHistory(direction) {
+			if (!searchHistoryDropdown || searchHistoryDropdown.style.display === 'none' || !searchHistoryDropdown.style.display) {
+				renderSearchHistoryDropdown();
+				searchHistoryDropdown.style.display = 'block';
+				selectedSearchHistoryIndex = 0;
+			} else {
+				if (direction === 'up') {
+					selectedSearchHistoryIndex = Math.max(0, selectedSearchHistoryIndex - 1);
+				} else if (direction === 'down') {
+					selectedSearchHistoryIndex = Math.min(searchHistory.length - 1, selectedSearchHistoryIndex + 1);
+				}
+			}
+			updateSearchHistorySelection();
+		}
+
+		function toggleSearchHistoryDropdown() {
+			if (!searchHistoryDropdown || !searchHistoryBtn) {
+				return;
+			}
+			if (searchHistoryDropdown.style.display === 'none' || !searchHistoryDropdown.style.display) {
+				renderSearchHistoryDropdown();
+				searchHistoryDropdown.style.display = 'block';
+			} else {
+				searchHistoryDropdown.style.display = 'none';
+			}
+		}
+
 		// Filter history management functions
 		function addToIncludeFilterHistory(filter) {
 			if (!filter || filter.trim() === '') {
@@ -6935,6 +7650,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 								systemTimestampEnabled = message.systemTimestampEnabled;
 								applySystemTimestampState();
 							}
+
+							if (message.filterCaseSensitive !== undefined) {
+								filterCaseSensitive = !!message.filterCaseSensitive;
+								applyFilterCaseSensitiveState();
+							}
 							
 							// Auto-connect if we have a valid configuration
 							if (shouldAutoConnect && config.port && config.baudRate) {
@@ -6974,6 +7694,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 						systemTimestampEnabled = message.systemTimestampEnabled;
 						applySystemTimestampState();
 					}
+
+					if (message.filterCaseSensitive !== undefined) {
+						filterCaseSensitive = !!message.filterCaseSensitive;
+						applyFilterCaseSensitiveState();
+					}
 					
 					updateUI();
 					break;
@@ -7012,6 +7737,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 					if (message.history && Array.isArray(message.history)) {
 						excludeFilterHistory = [...message.history];
 						console.log('FancyMon: Loaded exclude filter history:', excludeFilterHistory.length, 'items:', excludeFilterHistory);
+					}
+					break;
+
+				case 'searchHistoryLoaded':
+					if (message.history && Array.isArray(message.history)) {
+						searchHistory = [...message.history];
 					}
 					break;
 
@@ -7119,8 +7850,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 					isFollowing = true; // Reset to following mode after clear
 					lastRenderedLineIndex = -1; // Reset render tracking
 					needsFullRender = false;
+					searchPattern = '';
+					searchMatches = [];
+					currentSearchMatchIndex = -1;
+					if (searchInput) {
+						searchInput.value = '';
+					}
 					updateLineUsage();
-					updateScrollbarEventMarks();
+					afterMonitorContentUpdate();
 					break;
 					
 				default:

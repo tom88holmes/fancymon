@@ -31,6 +31,8 @@ export class SerialMonitor {
 	private readonly messageHistoryKey = 'fancymon.messageHistory';
 	private readonly includeFilterHistoryKey = 'fancymon.includeFilterHistory';
 	private readonly excludeFilterHistoryKey = 'fancymon.excludeFilterHistory';
+	private readonly searchHistoryKey = 'fancymon.searchHistory';
+	private readonly filterCaseSensitiveKey = 'fancymon.filterCaseSensitive';
 	private readonly timePatternHistoryKey = 'fancymon.timePatternHistory';
 	private readonly timePatternValueKey = 'fancymon.timePatternValue';
 	private readonly plotSessionsKey = 'fancymon.plotSessions';
@@ -185,6 +187,11 @@ export class SerialMonitor {
 						// Update local timestamp toggle state in separate storage
 						this.context.workspaceState.update(this.timestampStateKey, message.systemTimestampEnabled);
 						break;
+					case 'updateFilterCaseSensitiveState':
+						if (typeof message.filterCaseSensitive === 'boolean') {
+							this.context.workspaceState.update(this.filterCaseSensitiveKey, message.filterCaseSensitive);
+						}
+						break;
 					case 'updateMessageHistory':
 						// Save message history
 						if (message.history && Array.isArray(message.history)) {
@@ -204,6 +211,11 @@ export class SerialMonitor {
 						if (message.history && Array.isArray(message.history)) {
 							console.log('FancyMon: Saving exclude filter history:', message.history.length, 'items:', message.history);
 							this.context.workspaceState.update(this.excludeFilterHistoryKey, [...message.history]); // Create a copy
+						}
+						break;
+					case 'updateSearchHistory':
+						if (message.history && Array.isArray(message.history)) {
+							this.context.workspaceState.update(this.searchHistoryKey, [...message.history]);
 						}
 						break;
 
@@ -437,6 +449,7 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			const wrapState = this.context.workspaceState.get<boolean>(this.wrapStateKey) ?? true;
 			// Get local timestamp toggle state (default to false if not set)
 			const timestampState = this.context.workspaceState.get<boolean>(this.timestampStateKey) ?? false;
+			const filterCaseSensitive = this.context.workspaceState.get<boolean>(this.filterCaseSensitiveKey) ?? false;
 			
 			// Get message history
 			const messageHistory = this.context.workspaceState.get<string[]>(this.messageHistoryKey) || [];
@@ -445,6 +458,7 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			// Get filter histories
 			const includeFilterHistory = this.context.workspaceState.get<string[]>(this.includeFilterHistoryKey) || [];
 			const excludeFilterHistory = this.context.workspaceState.get<string[]>(this.excludeFilterHistoryKey) || [];
+			const searchHistory = this.context.workspaceState.get<string[]>(this.searchHistoryKey) || [];
 			console.log('FancyMon: Loading include filter history:', includeFilterHistory.length, 'items:', includeFilterHistory);
 			console.log('FancyMon: Loading exclude filter history:', excludeFilterHistory.length, 'items:', excludeFilterHistory);
 			
@@ -460,7 +474,8 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 				ports: ports,
 				lastConfig: lastConfig,
 				lineWrapEnabled: wrapState,
-				systemTimestampEnabled: timestampState
+				systemTimestampEnabled: timestampState,
+				filterCaseSensitive: filterCaseSensitive
 			});
 			
 			// Send message history separately
@@ -478,6 +493,11 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			this.sendMessage({
 				command: 'excludeFilterHistoryLoaded',
 				history: [...excludeFilterHistory] // Create a copy
+			});
+
+			this.sendMessage({
+				command: 'searchHistoryLoaded',
+				history: [...searchHistory]
 			});
 
 			// Send time pattern state
