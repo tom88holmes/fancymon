@@ -1,3 +1,18 @@
+/**
+ * Critical RegExp pattern strings for the embedded webview script.
+ * Defined in TypeScript and injected with JSON.stringify() into the HTML template so backslashes
+ * are not corrupted by nested template-literal escaping (a recurring source of plot/time bugs).
+ */
+const WEBVIEW_INJECTED_REGEX = {
+	defaultUptime: String.raw`\(([0-9]+)\)`,
+	rtcDatetime: String.raw`\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]`,
+	localBracketed: String.raw`\[(\d{2}:\d{2}:\d{2}\.\d{3})\]`,
+	stripAnsi: String.raw`\x1b\[[0-9;]*[a-zA-Z]`,
+	parseAnsi: String.raw`\x1b\[([0-9;]*)([a-zA-Z])`,
+	fileLineRef: String.raw`([a-zA-Z0-9_./\\-]+\.(?:c|cpp|h|hpp|hxx|cxx|cc|ts|tsx|js|jsx|py|rs|go|java|kt|swift|m|mm|s|S)):(\d+)`,
+	digitsCapture: String.raw`(\d+)`,
+} as const;
+
 export function getWebviewContentHtml(cspSource: string): string {
 	// Use VS Code's CSP source for script nonce (VS Code handles CSP automatically)
 	// Extract nonce from cspSource (it's usually in format like "vscode-webview://...")
@@ -157,6 +172,60 @@ export function getWebviewContentHtml(cspSource: string): string {
 			background-size: contain;
 			background-repeat: no-repeat;
 			background-position: center;
+		}
+
+		button.icon-toggle {
+			min-width: 38px;
+			padding: 6px 8px;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+		}
+
+		button.icon-toggle::before {
+			content: none;
+		}
+
+		/* Icon-only timestamp toggle: "on" should read as primary (blue), "off" as muted — opposite of generic .toggle.active */
+		button.icon-toggle.toggle:not(.active) {
+			background-color: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-button-secondaryForeground);
+		}
+
+		button.icon-toggle.toggle:not(.active):hover {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+
+		button.icon-toggle.toggle.active {
+			background-color: var(--vscode-button-background);
+			color: var(--vscode-button-foreground);
+		}
+
+		button.icon-toggle.toggle.active:hover {
+			background-color: var(--vscode-button-hoverBackground);
+		}
+
+		button.icon-toggle .clock-icon {
+			width: 20px;
+			height: 20px;
+			display: block;
+			color: inherit;
+		}
+
+		button.icon-toggle .clock-face,
+		button.icon-toggle .clock-hands {
+			stroke: currentColor;
+			fill: none;
+		}
+
+		button.icon-toggle .clock-face {
+			stroke-width: 1.35;
+		}
+
+		button.icon-toggle .clock-hands {
+			stroke-width: 1.65;
+			stroke-linecap: round;
+			stroke-linejoin: round;
 		}
 
 		.monitor {
@@ -846,6 +915,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 		<button id="pauseRunBtn" class="toggle active" title="Pause display (data still received, not shown)">Pause</button>
 		<button id="clearBtn">Clear</button>
 		<button id="toggleWrapBtn" class="toggle active" title="Toggle line wrapping">Wrap</button>
+		<button id="toggleSystemTimestampBtn" class="toggle icon-toggle" title="System timestamps disabled (click to enable)" aria-label="Toggle system timestamps" aria-pressed="false">
+			<svg class="clock-icon" viewBox="0 0 20 20" aria-hidden="true">
+				<circle class="clock-face" cx="10" cy="10" r="7.25"></circle>
+				<path class="clock-hands" d="M10 5.2v4.6l3.2 2.3"></path>
+			</svg>
+		</button>
 		<div class="control-group">
 			<label>Max Lines:</label>
 			<input type="number" id="maxLines" value="10000" min="100" max="1000000" style="width: 100px;">
@@ -912,7 +987,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				<label>Time Pattern (X-axis):</label>
 				<div class="time-pattern-wrapper" style="flex: 1; position: relative; display: flex; z-index: 1001; overflow: visible;">
 					<button id="timePatternHistoryBtn" class="history-btn" title="Time pattern history">▼</button>
-					<input type="text" id="timePatternInput" placeholder="Regex pattern for time value (e.g., \\(([0-9]+)\\))" value="\\(([0-9]+)\\)" style="flex: 1; min-width: 200px; border-left: none; border-radius: 0 2px 2px 0;">
+					<input type="text" id="timePatternInput" placeholder="Regex pattern for time value (e.g., ${WEBVIEW_INJECTED_REGEX.defaultUptime})" value=${JSON.stringify(WEBVIEW_INJECTED_REGEX.defaultUptime)} style="flex: 1; min-width: 200px; border-left: none; border-radius: 0 2px 2px 0;">
 					<div id="timePatternHistoryDropdown" class="history-dropdown filter-dropdown" style="display: none;"></div>
 				</div>
 				<span id="timePatternHint" style="font-size: 11px; color: var(--vscode-descriptionForeground);">Extracts uptime from parentheses</span>
@@ -955,6 +1030,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 	</div>
 
 	<script>
+		// Injected from webviewContent.ts via JSON.stringify — do not hand-escape regex backslashes in this block.
+		const FANCYMON_STRIP_ANSI_PATTERN = ${JSON.stringify(WEBVIEW_INJECTED_REGEX.stripAnsi)};
+		const FANCYMON_PARSE_ANSI_PATTERN = ${JSON.stringify(WEBVIEW_INJECTED_REGEX.parseAnsi)};
+
 		// Use DOMContentLoaded to ensure DOM is ready
 		document.addEventListener('DOMContentLoaded', function() {
 			console.log('FancyMon: DOMContentLoaded fired');
@@ -1021,6 +1100,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const pauseRunBtn = document.getElementById('pauseRunBtn');
 		const clearBtn = document.getElementById('clearBtn');
 		const toggleWrapBtn = document.getElementById('toggleWrapBtn');
+		const toggleSystemTimestampBtn = document.getElementById('toggleSystemTimestampBtn');
 		const sendInput = document.getElementById('sendInput');
 		const sendBtn = document.getElementById('sendBtn');
 		const historyBtn = document.getElementById('historyBtn');
@@ -1072,14 +1152,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 		const TIME_PATTERN_HISTORY_DEBOUNCE_MS = 5000;
 		let timePatternDropdownItems = []; // Flattened list of selectable items (recent + pinned)
 
-		// Pinned time patterns (always visible at bottom of dropdown)
-		// IMPORTANT: These strings are what the user should type into the input (single backslashes),
-		// i.e. \d means "digit" in RegExp, and \[ means "literal ["
-		// NOTE: Inside template string, '\\' in source becomes '\' at runtime
-		// So '\\d' in source = '\d' at runtime (correct - single backslash before d)
-		// The pattern constant is defined with '\\' to get '\' at runtime
-		const DEFAULT_UPTIME_TIME_PATTERN = '\\\\(([0-9]+)\\\\)';
-		const RTC_DATETIME_TIME_PATTERN = '\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\]';
+		// Pinned time patterns (injected — see WEBVIEW_INJECTED_REGEX at top of webviewContent.ts)
+		const DEFAULT_UPTIME_TIME_PATTERN = ${JSON.stringify(WEBVIEW_INJECTED_REGEX.defaultUptime)};
+		const RTC_DATETIME_TIME_PATTERN = ${JSON.stringify(WEBVIEW_INJECTED_REGEX.rtcDatetime)};
+		const LOCAL_BRACKETED_TIME_PATTERN = ${JSON.stringify(WEBVIEW_INJECTED_REGEX.localBracketed)};
 		const PINNED_TIME_PATTERNS = [
 			{
 				label: 'RTC datetime [YYYY-MM-DD HH:MM:SS.mmm]',
@@ -1087,9 +1163,14 @@ export function getWebviewContentHtml(cspSource: string): string {
 				hint: 'Extracts RTC datetime from brackets'
 			},
 			{
-				label: 'Uptime (ticks) (####)',
+				label: 'Host time [HH:MM:SS.mmm]',
+				pattern: LOCAL_BRACKETED_TIME_PATTERN,
+				hint: 'Matches monitor system timestamps [HH:MM:SS.mmm]'
+			},
+			{
+				label: 'Uptime (ms) (####)',
 				pattern: DEFAULT_UPTIME_TIME_PATTERN,
-				hint: 'Extracts uptime from parentheses'
+				hint: 'Extracts uptime in milliseconds from parentheses'
 			}
 		];
 
@@ -1103,6 +1184,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		let frozenAnchorOffset = 0;
 		let anchorLostScrollTop = null; // Track scroll position when anchor was lost
 		let lineWrapEnabled = true; // Default to wrapping enabled
+		let systemTimestampEnabled = false; // Prefix each received line with local system time
 		
 		// Raw text storage - stores lines as strings with ANSI codes preserved
 		let rawLines = [];
@@ -1243,10 +1325,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 			}
 
-			// Step 2: Escape brackets and dots for RTC patterns
+			// Host wall time [HH:MM:SS.mmm] (no YYYY-MM-DD) — same bracket/dot escaping as RTC patterns.
+			const looksLikeHostWall =
+				(p.includes('d{2}:') || p.includes('\\d{2}:')) &&
+				!(p.includes('d{4}-') || p.includes('\\d{4}-'));
+
+			// Step 2: Escape brackets and dots for RTC / host-wall patterns
 			// Be aggressive: if pattern starts with '[' and looks date-like, always escape brackets/dots
-			const needsBracketEscaping = (looksLikeRtc || looksLikeRtcLoose || looksLikeRtcWithBrackets) || 
-				(p.startsWith('[') && (p.includes('d{4}') || p.includes('\\d{4}') || p.includes('-') && p.includes(':')));
+			const needsBracketEscaping = (looksLikeRtc || looksLikeRtcLoose || looksLikeRtcWithBrackets || looksLikeHostWall) || 
+				(p.startsWith('[') && (p.includes('d{4}') || p.includes('\\d{4}') || p.includes('-') && p.includes(':') || looksLikeHostWall));
 			
 			if (needsBracketEscaping) {
 				// Escape all unescaped '[' and ']' characters
@@ -1284,8 +1371,63 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return p;
 		}
 
-		// Detect and parse the common ESP-IDF RTC datetime token:
-		//   "[YYYY-MM-DD HH:MM:SS.mmm]"
+		let wallTimeSessionDateStr = null;
+
+		function getWallTimeSessionDateStr() {
+			if (wallTimeSessionDateStr) {
+				return wallTimeSessionDateStr;
+			}
+			const d = new Date();
+			const pad = function (n) {
+				return String(n).padStart(2, '0');
+			};
+			wallTimeSessionDateStr =
+				d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+			return wallTimeSessionDateStr;
+		}
+
+		// "HH:MM:SS.mmm" wall clock (no YYYY-MM-DD) — FancyMon uses 3-digit ms; allow 1–3.
+		function isAsciiDigitCharCode(c) {
+			return c >= 48 && c <= 57;
+		}
+
+		function isTwoDigitAscii(s) {
+			return s && s.length === 2 && isAsciiDigitCharCode(s.charCodeAt(0)) && isAsciiDigitCharCode(s.charCodeAt(1));
+		}
+
+		function isAsciiDigits(s, minLen, maxLen) {
+			if (!s || s.length < minLen || s.length > maxLen) {
+				return false;
+			}
+			for (let i = 0; i < s.length; i++) {
+				if (!isAsciiDigitCharCode(s.charCodeAt(i))) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		function isBracketedWallTimeOnly(inner) {
+			if (!inner || inner.length < 10 || inner.length > 13) {
+				return false;
+			}
+			const parts = inner.split(':');
+			if (parts.length !== 3 || !isTwoDigitAscii(parts[0]) || !isTwoDigitAscii(parts[1])) {
+				return false;
+			}
+			const secMs = parts[2];
+			const dot = secMs.indexOf('.');
+			if (dot !== 2) {
+				return false;
+			}
+			const sec = secMs.slice(0, 2);
+			const ms = secMs.slice(3);
+			return isTwoDigitAscii(sec) && isAsciiDigits(ms, 1, 3);
+		}
+
+		// Detect and parse bracketed time tokens:
+		//   "[YYYY-MM-DD HH:MM:SS.mmm]" (ESP-IDF RTC style)
+		//   "[HH:MM:SS.mmm]" (FancyMon system timestamp prefix — date taken from session start, local calendar)
 		// Implemented without regex to avoid template-string escaping pitfalls.
 		function tryParseBracketedRtcDatetime(text) {
 			if (!text) return null;
@@ -1295,19 +1437,325 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (close < 0) return null;
 
 			const inner = text.substring(open + 1, close).trim();
-			// Basic shape check to avoid treating arbitrary bracketed text as a datetime
-			if (!inner.includes('-') || !inner.includes(':') || !inner.includes('.')) return null;
 
-			const iso = inner.replace(' ', 'T');
-			const ms = Date.parse(iso);
-			if (Number.isNaN(ms)) return null;
+			// Full RTC: "YYYY-MM-DD HH:MM:SS.mmm"
+			if (inner.includes('-') && inner.includes(':') && inner.includes('.')) {
+				const iso = inner.replace(' ', 'T');
+				const ms = Date.parse(iso);
+				if (!Number.isNaN(ms)) {
+					return {
+						iso,          // "YYYY-MM-DDTHH:MM:SS.mmm"
+						inner,        // "YYYY-MM-DD HH:MM:SS.mmm"
+						matchStart: open,
+						matchEnd: close + 1
+					};
+				}
+			}
 
+			// Host wall time only
+			if (isBracketedWallTimeOnly(inner)) {
+				const iso = getWallTimeSessionDateStr() + 'T' + inner;
+				const ms = Date.parse(iso);
+				if (Number.isNaN(ms)) {
+					return null;
+				}
+				return {
+					iso,
+					inner,
+					matchStart: open,
+					matchEnd: close + 1
+				};
+			}
+
+			return null;
+		}
+
+		function isRtcDatetimeTimePatternText(p) {
+			if (!p) {
+				return false;
+			}
+			return p.includes('\\d{4}-\\d{2}-\\d{2}') || p.includes('d{4}-d{2}-d{2}');
+		}
+
+		// Skip spaces, pipes, and stray ']' between bracketed tokens (e.g. "] | [2026-…]").
+		function skipPlotDecorators(text, start) {
+			if (!text) {
+				return start;
+			}
+			let i = start;
+			const len = text.length;
+			while (i < len) {
+				const c = text.charCodeAt(i);
+				if (c === 32 || c === 9 || c === 13 || c === 10 || c === 124 || c === 93) {
+					i++;
+					continue;
+				}
+				break;
+			}
+			return i;
+		}
+
+		// Skip bracketed wall clocks; return end index of first YYYY-MM-DD RTC token (or 0).
+		function findFirstRtcDatetimeBracketEnd(text) {
+			if (!text) {
+				return 0;
+			}
+			let search = 0;
+			const len = text.length;
+			while (search < len) {
+				search = skipPlotDecorators(text, search);
+				if (search >= len) {
+					return 0;
+				}
+				const seg = tryParseBracketedRtcDatetime(text.slice(search));
+				if (!seg) {
+					search++;
+					continue;
+				}
+				const absEnd = search + seg.matchEnd;
+				if (seg.inner.includes('-')) {
+					return absEnd;
+				}
+				search = skipPlotDecorators(text, absEnd);
+			}
+			return 0;
+		}
+
+		// rawLines entries include the trailing newline; pattern calibration does not.
+		function stripTrailingLineTerminators(text) {
+			if (!text) {
+				return text;
+			}
+			let t = text;
+			while (t.length > 0) {
+				const c = t.charCodeAt(t.length - 1);
+				if (c === 10 || c === 13) {
+					t = t.slice(0, -1);
+				} else {
+					break;
+				}
+			}
+			return t;
+		}
+
+		function plainTextForPlotProcessing(line) {
+			return stripTrailingLineTerminators(stripAnsiCodes(line));
+		}
+
+		// Build without regex literals in the template string (backslash escaping is fragile there).
+		function buildHostWallTimestampPrefixRe() {
+			const bs = String.fromCharCode(92);
+			// Literal [HH:MM:SS.mmm] — escape [ and ] for RegExp (not a character class).
+			const wall =
+				bs + '[' + '[0-9]{2}:[0-9]{2}:[0-9]{2}' + bs + '.' + '[0-9]{3}' + bs + ']';
+			return new RegExp('^' + wall + bs + 's+');
+		}
+
+		function buildTwoLeadingHostWallBracketsRe() {
+			const bs = String.fromCharCode(92);
+			const wall =
+				bs + '[' + '[0-9]{2}:[0-9]{2}:[0-9]{2}' + bs + '.' + '[0-9]{3}' + bs + ']';
+			return new RegExp('^' + wall + bs + 's+' + wall);
+		}
+
+		const hostWallTimestampPrefixRe = buildHostWallTimestampPrefixRe();
+		const twoLeadingHostWallBracketsRe = buildTwoLeadingHostWallBracketsRe();
+
+		// Verbose plot matching diagnostics (calibration, Find and Add All, buffer replay). Set false to quiet DevTools.
+		const PLOT_MATCH_DEBUG = true;
+
+		function plotDebug() {
+			if (!PLOT_MATCH_DEBUG) {
+				return;
+			}
+			console.log.apply(console, arguments);
+		}
+
+		function plotHead(text, maxLen) {
+			const max = maxLen == null ? 96 : maxLen;
+			if (!text) {
+				return '(empty)';
+			}
+			const s = text.length > max ? text.slice(0, max) + '\u2026' : text;
+			return JSON.stringify(s);
+		}
+
+		function getPlotTimeAxisDebug() {
+			const raw = timePatternInput && timePatternInput.value ? timePatternInput.value : '';
+			const norm = raw ? normalizeTimePatternInputValue(raw) : '';
 			return {
-				iso,          // "YYYY-MM-DDTHH:MM:SS.mmm"
-				inner,        // "YYYY-MM-DD HH:MM:SS.mmm"
-				matchStart: open,
-				matchEnd: close + 1
+				raw: raw.slice(0, 96),
+				normalized: norm.slice(0, 96),
+				hostWallAxis: norm ? isBracketWallTimePatternText(norm) : false,
+				rtcAxis: norm ? isRtcDatetimeTimePatternText(norm) : false,
+				axisMode: norm ? computeTimeAxisModeFromPattern(norm) : 'none'
 			};
+		}
+
+		function dumpPlotMatchPipeline(label, plainText, opts) {
+			if (!PLOT_MATCH_DEBUG || !plainText) {
+				return;
+			}
+			opts = opts || {};
+			const useNormalize = opts.useNormalize === true;
+			const plotBase = useNormalize
+				? normalizePatternPlainTextForVariableExtraction(plainText)
+				: plotBaseForVariableMatching(plainText);
+			const plotLine = plotLineForTimeAndVariables(plotBase);
+			const computeEnd = computeVariableMatchStartIndex(plotLine);
+			const rtcEnd = findFirstRtcDatetimeBracketEnd(plotLine);
+			const resolved = resolveVariableMatchStartIndex(plotLine, plotBase);
+			const afterTime = resolved > 0 ? plotLine.substring(resolved) : plotLine;
+			const timeVal = extractTimeValue(plainText);
+			const payload = {
+				label: label,
+				systemTimestampEnabled: !!systemTimestampEnabled,
+				timeAxis: getPlotTimeAxisDebug(),
+				plainLen: plainText.length,
+				plainHead: plotHead(plainText),
+				plotBaseHead: plotHead(plotBase),
+				plotLineHead: plotHead(plotLine),
+				computeVariableMatchStart: computeEnd,
+				findFirstRtcEnd: rtcEnd,
+				resolvedMatchStart: resolved,
+				afterTimeHead: plotHead(afterTime, 80),
+				extractTimeValue: timeVal
+			};
+			plotDebug('FancyMon [plot] pipeline —', payload);
+			if (useNormalize) {
+				const liveBase = plotBaseForVariableMatching(plainText);
+				if (liveBase !== plotBase) {
+					plotDebug('FancyMon [plot] pipeline — calibration vs live strip differ:', {
+						label: label,
+						liveBaseHead: plotHead(liveBase),
+						normBaseHead: plotHead(plotBase)
+					});
+				}
+			} else {
+				const normBase = normalizePatternPlainTextForVariableExtraction(plainText);
+				if (normBase !== plotBase) {
+					plotDebug('FancyMon [plot] pipeline — live vs calibration strip differ:', {
+						label: label,
+						liveBaseHead: plotHead(plotBase),
+						normBaseHead: plotHead(normBase)
+					});
+				}
+			}
+		}
+
+		function probeVariableMatchOnPlainText(plainText, variable) {
+			const plotBase = plotBaseForVariableMatching(plainText);
+			const plotLine = plotLineForTimeAndVariables(plotBase);
+			const timeEnd = resolveVariableMatchStartIndex(plotLine, plotBase);
+			const afterTimeText = timeEnd > 0 ? plotLine.substring(timeEnd) : plotLine;
+			const matchText = variable.matchFromTimeToken ? afterTimeText : plotLine;
+			const timeValue = extractTimeValue(plainText);
+			const out = {
+				name: variable.name,
+				timeValue: timeValue,
+				variableMatchStart: timeEnd,
+				matchFromTimeToken: !!variable.matchFromTimeToken,
+				expectedAnchor: variable.lineAnchorToken || null,
+				liveAnchor: getLineAnchorTokenAfterTimestamp(matchText),
+				matchTextHead: plotHead(matchText, 72),
+				keyName: variable.keyName || null,
+				captureIndex: variable.captureIndex || 1,
+				keyHit: false,
+				patternHit: false,
+				parsedValue: null,
+				failReason: null
+			};
+			if (timeValue === null) {
+				out.failReason = 'extractTimeValue returned null';
+				return out;
+			}
+			if (variable.lineAnchorToken) {
+				if (out.liveAnchor !== variable.lineAnchorToken) {
+					out.failReason = 'anchor mismatch (expected ' + variable.lineAnchorToken + ', got ' + (out.liveAnchor || 'none') + ')';
+					return out;
+				}
+			}
+			if (variable.keyRegex) {
+				variable.keyRegex.lastIndex = 0;
+				const km = variable.keyRegex.exec(matchText);
+				if (km && km[1]) {
+					const v = parseFloat(km[1]);
+					if (!isNaN(v)) {
+						out.keyHit = true;
+						out.parsedValue = v;
+						return out;
+					}
+				}
+			}
+			if (variable.regex) {
+				variable.regex.lastIndex = 0;
+				const pm = variable.regex.exec(matchText);
+				const cap = variable.captureIndex || 1;
+				if (pm && pm[cap]) {
+					const v = parseFloat(pm[cap]);
+					if (!isNaN(v)) {
+						out.patternHit = true;
+						out.parsedValue = v;
+						return out;
+					}
+					out.failReason = 'pattern matched but capture ' + cap + ' not a number';
+					return out;
+				}
+				out.failReason = variable.keyRegex ? 'key and pattern regex both missed' : 'pattern regex missed';
+				out.patternPrefix = variable.pattern ? variable.pattern.slice(0, 120) : '';
+				return out;
+			}
+			out.failReason = 'no regex on variable';
+			return out;
+		}
+
+		function findSampleBufferLineForPlotDebug() {
+			if (!rawLines || rawLines.length === 0) {
+				return null;
+			}
+			const filter =
+				typeof filterPattern === 'string' && filterPattern.trim().length > 0
+					? filterPattern.trim().toLowerCase()
+					: '';
+			let anchor = null;
+			if (plotVariables.length > 0) {
+				const last = plotVariables[plotVariables.length - 1];
+				anchor = last.lineAnchorToken || last.keyName || null;
+			}
+			for (let i = 0; i < rawLines.length; i++) {
+				const pt = plainTextForPlotProcessing(rawLines[i]);
+				if (filter && pt.toLowerCase().indexOf(filter) < 0) {
+					continue;
+				}
+				if (anchor && pt.indexOf(anchor) < 0) {
+					continue;
+				}
+				return { index: i, plainText: pt };
+			}
+			return { index: 0, plainText: plainTextForPlotProcessing(rawLines[0]) };
+		}
+
+		function diagnosePlotMatchFailure(variablesToProbe) {
+			if (!PLOT_MATCH_DEBUG) {
+				return;
+			}
+			const sample = findSampleBufferLineForPlotDebug();
+			if (!sample) {
+				plotDebug('FancyMon [plot] diagnose — no buffer lines');
+				return;
+			}
+			plotDebug('FancyMon [plot] diagnose — sample buffer line #' + sample.index + ' of ' + rawLines.length);
+			dumpPlotMatchPipeline('buffer line (live strip)', sample.plainText, {});
+			dumpPlotMatchPipeline('buffer line (calibration strip)', sample.plainText, { useNormalize: true });
+			const vars = variablesToProbe && variablesToProbe.length ? variablesToProbe : plotVariables;
+			vars.forEach(function (v) {
+				plotDebug('FancyMon [plot] diagnose — probe', probeVariableMatchOnPlainText(sample.plainText, v));
+			});
+			if (patternInput && patternInput.value.trim().length > 0) {
+				const calPlain = stripTrailingLineTerminators(stripAnsiCodes(patternInput.value));
+				plotDebug('FancyMon [plot] diagnose — Pattern Input still set; calibration reference:');
+				dumpPlotMatchPipeline('pattern input', calPlain, { useNormalize: true });
+			}
 		}
 
 		// Find where the time token ends so we can safely ignore it for variable extraction / matching.
@@ -1321,8 +1769,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const timePattern = normalizeTimePatternInputValue(timePatternInput.value);
 				const axisMode = computeTimeAxisModeFromPattern(timePattern);
 
-				// RTC: deterministically use the bracketed datetime token.
 				if (axisMode === 'rtc') {
+					// Skip leading [HH:MM:SS.mmm] tokens, then land after the first [YYYY-MM-DD …] if present.
+					if (isRtcDatetimeTimePatternText(timePattern) || isBracketWallTimePatternText(timePattern)) {
+						const rtcEnd = findFirstRtcDatetimeBracketEnd(plainText);
+						if (rtcEnd > 0) {
+							return rtcEnd;
+						}
+						if (isBracketWallTimePatternText(timePattern)) {
+							const seg = tryParseBracketedRtcDatetime(plainText);
+							return seg ? skipLogDecorAfterWallTimeToken(plainText, seg.matchEnd) : 0;
+						}
+					}
 					const seg = tryParseBracketedRtcDatetime(plainText);
 					return seg ? seg.matchEnd : 0;
 				}
@@ -1339,6 +1797,196 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 		}
 
+		// Strip leading ESP-IDF severity (I/W/E/D) only for classic "I message" lines — keep "I [2026-…]" / "I [HH:MM:SS.mmm]" intact.
+		function plotLineForTimeAndVariables(plainText) {
+			if (!plainText || plainText.length === 0) {
+				return plainText;
+			}
+			if (plainText.charCodeAt(0) === 91) {
+				return plainText;
+			}
+			const c0 = plainText.charCodeAt(0);
+			if (c0 === 124) {
+				return plainText;
+			}
+			if (c0 === 73 || c0 === 87 || c0 === 69 || c0 === 68) {
+				let j = 1;
+				while (j < plainText.length) {
+					const c = plainText.charCodeAt(j);
+					if (c === 32 || c === 9 || c === 13 || c === 10) {
+						j++;
+						continue;
+					}
+					if (c === 91) {
+						return plainText;
+					}
+					break;
+				}
+			}
+			return plainText.slice(1);
+		}
+
+		// Index in plotLine where variable regex / key matching should begin (after wall clocks + device RTC).
+		function computeVariableMatchStartIndex(text) {
+			if (!text) {
+				return 0;
+			}
+			const rtcEnd = findFirstRtcDatetimeBracketEnd(text);
+			if (rtcEnd > 0) {
+				return rtcEnd;
+			}
+			// Host-wall X-axis: never stop at [HH:MM:SS.mmm] only — variables live after device RTC.
+			const hostWallAxis =
+				timePatternInput &&
+				timePatternInput.value &&
+				isBracketWallTimePatternText(normalizeTimePatternInputValue(timePatternInput.value));
+			if (!hostWallAxis) {
+				const seg = tryParseBracketedRtcDatetime(text);
+				if (seg && isBracketedWallTimeOnly(seg.inner)) {
+					return skipLogDecorAfterWallTimeToken(text, seg.matchEnd);
+				}
+				if (timePatternInput && timePatternInput.value) {
+					const rx = tryCreateTimeRegex();
+					if (rx) {
+						const m = rx.exec(text);
+						if (m && (m[1] != null || m[2] != null)) {
+							return m.index + m[0].length;
+						}
+					}
+				}
+			}
+			return 0;
+		}
+
+		function resolveVariableMatchStartIndex(plotLine, plotBase) {
+			let timeEnd = computeVariableMatchStartIndex(plotLine);
+			if (timeEnd === 0) {
+				timeEnd = findFirstRtcDatetimeBracketEnd(plotLine);
+			}
+			if (timeEnd === 0 && plotBase && plotBase !== plotLine) {
+				timeEnd = findFirstRtcDatetimeBracketEnd(plotBase);
+			}
+			return timeEnd;
+		}
+
+		function resolveTimeTokenEndForPlotLine(plotLine, plotBase) {
+			let timeEnd = computeVariableMatchStartIndex(plotLine);
+			if (timeEnd > 0) {
+				return timeEnd;
+			}
+			if (plotBase && plotBase !== plotLine) {
+				timeEnd = computeVariableMatchStartIndex(plotBase);
+				if (timeEnd > 0 && plotLine === plotBase.slice(1)) {
+					return Math.max(0, timeEnd - 1);
+				}
+				return timeEnd;
+			}
+			return 0;
+		}
+
+		function plotBaseForVariableMatching(plainText) {
+			let t = stripLeadingHostWallTimestampForVariableMatching(plainText);
+			t = stripLeadingDeviceWallBracket(t);
+			let i = 0;
+			while (i < t.length) {
+				const c = t.charCodeAt(i);
+				if (c === 32 || c === 9 || c === 13 || c === 10 || c === 124) {
+					i++;
+					continue;
+				}
+				break;
+			}
+			return i > 0 ? t.slice(i) : t;
+		}
+
+		function resolveSortedNumberForSelection(numIndex, sortedNumbers, timeEnd, matchFromTimeToken) {
+			const numObj = extractedNumbers.find(function (n) {
+				return n.index === numIndex;
+			});
+			if (numObj) {
+				const relPos = matchFromTimeToken ? numObj.position - timeEnd : numObj.position;
+				const byPos = sortedNumbers.find(function (n) {
+					return n.position === relPos;
+				});
+				if (byPos) {
+					return byPos;
+				}
+				const byText = sortedNumbers.find(function (n) {
+					return n.text === numObj.text;
+				});
+				if (byText) {
+					return byText;
+				}
+			}
+			return sortedNumbers.find(function (n) {
+				return n.index === numIndex;
+			});
+		}
+
+		function stripLeadingHostWallTimestampForVariableMatching(plainText) {
+			if (!systemTimestampEnabled || !plainText) {
+				return plainText;
+			}
+			let t = plainText.replace(hostWallTimestampPrefixRe, '');
+			let i = 0;
+			while (i < t.length) {
+				const c = t.charCodeAt(i);
+				if (c === 32 || c === 9 || c === 13 || c === 10) {
+					i++;
+					continue;
+				}
+				break;
+			}
+			if (i < t.length && t.charCodeAt(i) === 124) {
+				i++;
+				while (i < t.length) {
+					const c = t.charCodeAt(i);
+					if (c === 32 || c === 9 || c === 13 || c === 10) {
+						i++;
+						continue;
+					}
+					break;
+				}
+				t = t.slice(i);
+			}
+			return stripLeadingDeviceWallBracket(t);
+		}
+
+		// Align Pattern Input with live buffer lines (same host/device strip as plotBaseForVariableMatching).
+		function normalizePatternPlainTextForVariableExtraction(plainText) {
+			if (!plainText) {
+				return plainText;
+			}
+			return plotBaseForVariableMatching(plainText);
+		}
+
+		// Drop a leading [HH:MM:SS.mmm] wall-clock token (device log prefix), not device RTC.
+		function stripLeadingDeviceWallBracket(text) {
+			if (!text) {
+				return text;
+			}
+			const seg = tryParseBracketedRtcDatetime(text);
+			if (!seg || seg.inner.includes('-') || !isBracketedWallTimeOnly(seg.inner)) {
+				return text;
+			}
+			return text.slice(skipLogDecorAfterWallTimeToken(text, seg.matchEnd));
+		}
+
+		function isEspIdfSeverityAnchor(token) {
+			if (!token || token.length !== 1) {
+				return false;
+			}
+			const c = token.charCodeAt(0);
+			return c === 73 || c === 87 || c === 69 || c === 68;
+		}
+
+		function normalizeLineAnchorToken(token) {
+			if (!token || isEspIdfSeverityAnchor(token)) {
+				return null;
+			}
+			return token;
+		}
+
 		// First log "tag" after the timestamp: skip whitespace, optional parenthesized uptime "(12345)", and bare numbers;
 		// then return the first [A-Za-z_][A-Za-z0-9_]* (e.g. mem_util, BATT_SOC). Used to ignore unrelated lines that
 		// share a field name like "internal" on a different message type.
@@ -1352,6 +2000,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 				const code = c.charCodeAt(0);
 				return code === 32 || code === 9 || code === 13 || code === 10;
 			};
+			// Skip leading [HH:MM:SS.mmm] / [YYYY-MM-DD …] brackets so we do not anchor on "I" after a wall-clock token.
+			while (i < len) {
+				const seg = tryParseBracketedRtcDatetime(text.slice(i));
+				if (!seg) {
+					break;
+				}
+				i += seg.matchEnd;
+				while (i < len && isSpace(text[i])) {
+					i++;
+				}
+			}
 			while (i < len && isSpace(text[i])) {
 				i++;
 			}
@@ -1439,11 +2098,60 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return PINNED_TIME_PATTERNS.some(x => x.pattern === p);
 		}
 
+		// Bracketed wall time (HH:MM:SS.mmm) without YYYY-MM-DD — used for axis mode + hint text.
+		// Do not use string literals with "\\d" here (template escaping); use char codes.
+		function isBracketWallTimePatternText(p) {
+			if (!p || isRtcDatetimeTimePatternText(p)) {
+				return false;
+			}
+			const normalizedLocal = normalizeTimePatternInputValue(LOCAL_BRACKETED_TIME_PATTERN);
+			if (p === normalizedLocal) {
+				return true;
+			}
+			const bs = String.fromCharCode(92);
+			const hasOpenBracket = p.includes('[') || p.includes(bs + '[');
+			if (!hasOpenBracket || !p.includes(':')) {
+				return false;
+			}
+			const hasDigitGroup = p.includes(bs + 'd{2}') || p.includes('d{2}');
+			const hasMillis = p.includes(bs + '.') || p.includes('.');
+			return hasDigitGroup && hasMillis;
+		}
+
+		// After [HH:MM:SS.mmm], logs often have " | " or whitespace before the next token.
+		function skipLogDecorAfterWallTimeToken(text, endIndex) {
+			if (!text || endIndex <= 0) {
+				return endIndex;
+			}
+			let i = endIndex;
+			const len = text.length;
+			while (i < len) {
+				const c = text.charCodeAt(i);
+				if (c === 32 || c === 9 || c === 13 || c === 10) {
+					i++;
+					continue;
+				}
+				break;
+			}
+			if (i < len && text.charCodeAt(i) === 124) {
+				i++;
+			}
+			return skipPlotDecorators(text, i);
+		}
+
 		function computeTimeAxisModeFromPattern(pattern) {
 			const p = normalizeTimePatternInputValue(pattern);
 			// First check if it matches the pinned RTC pattern
 			const normalizedRtcPattern = normalizeTimePatternInputValue(RTC_DATETIME_TIME_PATTERN);
 			if (p === normalizedRtcPattern) {
+				return 'rtc';
+			}
+			const normalizedLocalWallPattern = normalizeTimePatternInputValue(LOCAL_BRACKETED_TIME_PATTERN);
+			if (p === normalizedLocalWallPattern) {
+				return 'rtc';
+			}
+
+			if (isBracketWallTimePatternText(p)) {
 				return 'rtc';
 			}
 			
@@ -1466,7 +2174,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Update hint text
 			if (timePatternHint) {
 				const pinned = PINNED_TIME_PATTERNS.find(x => x.pattern === pattern);
-				timePatternHint.textContent = pinned?.hint || (mode === 'rtc' ? 'Extracts RTC datetime from brackets' : 'Extracts time from capture group 1');
+				let hintText = pinned ? pinned.hint : null;
+				if (!hintText) {
+					if (mode === 'rtc') {
+						hintText = isBracketWallTimePatternText(pattern)
+							? 'Matches host wall time [HH:MM:SS.mmm] from brackets'
+							: 'Extracts RTC datetime from brackets';
+					} else {
+						hintText = 'Extracts time from capture group 1';
+					}
+				}
+				timePatternHint.textContent = hintText;
 			}
 
 			// If mode changes, clear plot data to avoid mixing numeric uptime with date-time values
@@ -1823,20 +2541,102 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return matches;
 		}
 
+		// Replace ESP device "[YYYY-MM-DD HH:MM:SS.mmm]" + following "(uptime)" with non-digit placeholders (same length)
+		// so extractNumbers() ignores them and escapeRegexChars can emit one flexible sub-regex per placeholder run.
+		// Skips bracket tokens whose inner text has no '-' (e.g. host wall [12:30:43.853]) and continues scanning.
+		function replaceEspDeviceVolatilePlaceholders(text) {
+			if (!text) {
+				return text;
+			}
+			const PH_RTC = String.fromCharCode(65532);
+			const PH_UP = String.fromCharCode(65533);
+			let t = text;
+			let search = 0;
+			for (;;) {
+				if (search >= t.length) {
+					break;
+				}
+				const sub = t.slice(search);
+				const seg = tryParseBracketedRtcDatetime(sub);
+				if (!seg) {
+					break;
+				}
+				const absStart = search + seg.matchStart;
+				const absEnd = search + seg.matchEnd;
+				if (!seg.inner.includes('-')) {
+					search = absEnd;
+					continue;
+				}
+				const spanLen = absEnd - absStart;
+				t = t.slice(0, absStart) + PH_RTC.repeat(spanLen) + t.slice(absEnd);
+				let j = absStart + spanLen;
+				while (j < t.length && (t.charCodeAt(j) === 32 || t.charCodeAt(j) === 9)) {
+					j++;
+				}
+				if (j < t.length && t[j] === '(') {
+					const closeParen = t.indexOf(')', j + 1);
+					if (closeParen > j) {
+						const innerU = t.slice(j + 1, closeParen);
+						let allDigit = true;
+						for (let q = 0; q < innerU.length; q++) {
+							const c = innerU.charCodeAt(q);
+							if (c < 48 || c > 57) {
+								allDigit = false;
+								break;
+							}
+						}
+						if (allDigit && innerU.length > 0) {
+							const upLen = closeParen + 1 - j;
+							t = t.slice(0, j) + PH_UP.repeat(upLen) + t.slice(closeParen + 1);
+						}
+					}
+				}
+				break;
+			}
+			return t;
+		}
+
 		// Generate regex pattern that captures ALL numbers in the text
 		// This allows one regex to serve multiple variables
 		function generateCommonPattern(text) {
 			const sourceText = stripAnsiCodes(text);
-			const numbers = extractNumbers(sourceText);
+			const placeholderText = replaceEspDeviceVolatilePlaceholders(sourceText);
+			const numbers = extractNumbers(placeholderText);
 			if (numbers.length === 0) return null;
-			
+
 			// Escape special regex characters, but be tolerant of minor formatting differences between lines known to occur
 			// in logs (spaces after commas, '=' vs ':', varying whitespace).
 			function escapeRegexChars(str) {
+				if (!str) {
+					return '';
+				}
 				let result = '';
 				let lastWasWhitespaceToken = false;
+				const CC_RTC = 65532;
+				const CC_UP = 65533;
 				for (let i = 0; i < str.length; i++) {
 					const char = str[i];
+					const code = str.charCodeAt(i);
+					if (code === CC_RTC) {
+						let j = i + 1;
+						while (j < str.length && str.charCodeAt(j) === CC_RTC) {
+							j++;
+						}
+						result += '(?:\\\\[\\\\d{4}-\\\\d{2}-\\\\d{2} \\\\d{2}:\\\\d{2}:\\\\d{2}\\\\.\\\\d{3}\\\\])';
+						i = j - 1;
+						lastWasWhitespaceToken = false;
+						continue;
+					}
+					if (code === CC_UP) {
+						let j = i + 1;
+						while (j < str.length && str.charCodeAt(j) === CC_UP) {
+							j++;
+						}
+						result += '\\\\(\\\\d+\\\\)';
+						i = j - 1;
+						lastWasWhitespaceToken = false;
+						continue;
+					}
 
 					// Identifier run: keep it mostly literal, but allow small suffix variations (e.g. soc_ob vs soc_obs)
 					if ((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char === '_') {
@@ -1913,7 +2713,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			for (const num of sortedNumbers) {
 				// Add text before this number
 				if (num.position > pos) {
-					const textBefore = sourceText.substring(pos, num.position);
+					const textBefore = placeholderText.substring(pos, num.position);
 					pattern += escapeRegexChars(textBefore);
 				}
 				
@@ -1932,12 +2732,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 				let nextPos = num.position + num.text.length;
 				let j = nextPos;
 				// Optional whitespace before unit
-				while (j < sourceText.length && (sourceText[j] === ' ' || sourceText[j] === '\\t')) {
+				while (j < placeholderText.length && (placeholderText[j] === ' ' || placeholderText[j] === '\\t')) {
 					j++;
 				}
 				const unitStart = j;
-				while (j < sourceText.length) {
-					const ch = sourceText[j];
+				while (j < placeholderText.length) {
+					const ch = placeholderText[j];
 					const isLetter = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
 					if (isLetter || ch === '%') {
 						j++;
@@ -1953,8 +2753,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			
 			// Add remaining text after last number
-			if (pos < sourceText.length) {
-				const textAfter = sourceText.substring(pos);
+			if (pos < placeholderText.length) {
+				const textAfter = placeholderText.substring(pos);
 				pattern += escapeRegexChars(textAfter);
 			}
 			
@@ -2080,7 +2880,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (!patternInput || !extractionPreview) return;
 			
 			const text = patternInput.value;
-			const plainText = stripAnsiCodes(text);
+			const plainText = stripTrailingLineTerminators(stripAnsiCodes(text));
+			const plotBase = normalizePatternPlainTextForVariableExtraction(plainText);
+			const plotLine = plotLineForTimeAndVariables(plotBase);
 			
 			// Extract time value and find its position if time pattern is set
 			let timeValue = null;
@@ -2091,51 +2893,40 @@ export function getWebviewContentHtml(cspSource: string): string {
 					if (timePatternInput.value !== timePattern) {
 						setInputValuePreserveCaret(timePatternInput, timePattern);
 					}
-					const axisMode = computeTimeAxisModeFromPattern(timePattern);
-
-					// If we're in RTC mode, deterministically strip the bracketed datetime token so it never shows up as a variable.
-					// This is robust even if the user's regex is malformed (e.g. missing escapes).
-					let rtcMatchEnd = 0;
-					if (axisMode === 'rtc') {
-						const seg = tryParseBracketedRtcDatetime(plainText);
-						if (seg) {
-							timeValue = seg.inner;
-							rtcMatchEnd = seg.matchEnd;
-							timeMatchEnd = rtcMatchEnd; // Set initial value from RTC parser
+					timeMatchEnd = resolveVariableMatchStartIndex(plotLine, plotBase);
+					if (isBracketWallTimePatternText(timePattern)) {
+						const wallSeg = tryParseBracketedRtcDatetime(plainText);
+						if (wallSeg) {
+							timeValue = wallSeg.inner;
 						}
-					}
-
-					// 1) Try the user-provided time regex, but ONLY accept it if it actually contains a capture group.
-					// Accepting match[0] is dangerous: if the user accidentally types an unescaped '[',
-					// the regex can degrade into a character class and "match" a single character inside the datetime,
-					// which would make us treat most of the datetime as plot variables.
-					// In RTC mode, only use the user's regex if it matches at least as much as the RTC parser found.
-					const regex = tryCreateTimeRegex();
-					if (regex) {
-						const match = regex.exec(plainText);
-						if (match) {
-							const capturedValue = match[2] ?? match[1] ?? null;
-							if (capturedValue !== null) {
-								const userMatchEnd = match.index + match[0].length;
-								// In RTC mode: only use user's regex if it matches at least as much as RTC parser
-								// This prevents malformed regexes from overriding the correct RTC match
-								if (axisMode === 'rtc' && rtcMatchEnd > 0) {
-									if (userMatchEnd >= rtcMatchEnd) {
-										timeValue = String(capturedValue);
-										timeMatchEnd = userMatchEnd;
-									}
-									// Otherwise, keep the RTC parser's timeMatchEnd
-								} else {
-									// Uptime mode: use user's regex match
-									timeValue = String(capturedValue);
-									timeMatchEnd = userMatchEnd;
+					} else if (timeMatchEnd > 0) {
+						if (isRtcDatetimeTimePatternText(timePattern)) {
+							let search = 0;
+							while (search < plotLine.length) {
+								const sub = plotLine.slice(search);
+								const seg = tryParseBracketedRtcDatetime(sub);
+								if (!seg) {
+									break;
 								}
+								if (seg.inner.includes('-')) {
+									timeValue = seg.inner;
+									break;
+								}
+								search = search + seg.matchEnd;
+							}
+						} else {
+							const seg = tryParseBracketedRtcDatetime(plotLine);
+							if (seg) {
+								timeValue = seg.inner;
 							}
 						}
 					}
-
-					// Note: In RTC mode, tryParseBracketedRtcDatetime already provides the “correct” filtering boundary.
-					// In uptime mode: if the user's pattern is invalid / doesn't capture, we just won't filter.
+					if (timeValue === null) {
+						const parsed = extractTimeValue(plainText);
+						if (parsed !== null) {
+							timeValue = typeof parsed === 'number' ? String(parsed) : parsed;
+						}
+					}
 				} catch (e) {
 					console.error('FancyMon: Error matching time pattern:', e);
 				}
@@ -2145,9 +2936,15 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// extractNumbers strips ANSI codes internally, but we need to pass the already-stripped text
 			// to ensure positions are consistent. However, extractNumbers expects the original text.
 			// So we'll extract numbers and then verify positions match plainText
-			let allNumbers = extractNumbers(text);
+			let extractionPlain = plotLine;
+			if (timeMatchEnd > 0) {
+				extractionPlain = plotLine.slice(0, timeMatchEnd) + replaceEspDeviceVolatilePlaceholders(plotLine.slice(timeMatchEnd));
+			} else {
+				extractionPlain = replaceEspDeviceVolatilePlaceholders(plotLine);
+			}
+			let allNumbers = extractNumbers(extractionPlain);
 			
-			// Verify positions are correct by checking against plainText
+			// Verify positions are correct by checking against plotLine
 			// If extractNumbers used a different plainText (due to different ANSI stripping),
 			// positions might be off. But since both use the same stripAnsiCodes function, they should match.
 			
@@ -2203,8 +3000,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					const nameInput = document.createElement('input');
 					nameInput.type = 'text';
 					// Prefer auto-suggested identifier name (TEMP/voltage/etc); include value in parentheses as a hint
-					// num.position is in plainText (stripped), so use plainText for name extraction
-					const suggestedName = suggestVariableNameFromContext(plainText, num.position);
+					// num.position is in plotLine (stripped + aligned with live variable matching)
+					const suggestedName = suggestVariableNameFromContext(plotLine, num.position);
 					nameInput.placeholder = suggestedName ? (suggestedName + ' (' + num.text + ')') : num.text;
 					nameInput.style.width = '120px';
 					nameInput.style.marginRight = '5px';
@@ -2316,17 +3113,20 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const rawText = patternInput.value;
 			if (!rawText || rawText.trim().length === 0) return;
 
-			const plainText = stripAnsiCodes(rawText);
+			const plainText = stripTrailingLineTerminators(stripAnsiCodes(rawText));
+			const plotBase = normalizePatternPlainTextForVariableExtraction(plainText);
+			dumpPlotMatchPipeline('addVariableToPlot (calibration)', plainText, { useNormalize: true });
+			dumpPlotMatchPipeline('addVariableToPlot (same line, live strip)', plainText, {});
 
 			// IMPORTANT: The generated regex must match future lines.
 			// So we generate the pattern from the portion AFTER the time token, and we will also
 			// apply the regex to that same substring at runtime.
-			// Drop first character for variable regex only (e.g. ESP-IDF I/W/E/D); time still parsed from full line.
-			const plotLine = plainText.length > 0 ? plainText.slice(1) : plainText;
-			const timeEnd = getTimeTokenEndIndexForLine(plotLine);
+			// Drop first character for variable regex only (e.g. ESP-IDF I/W/E/D); keep '[' lines (host timestamps). Time is parsed from full line.
+			const plotLine = plotLineForTimeAndVariables(plotBase);
+			const timeEnd = resolveVariableMatchStartIndex(plotLine, plotBase);
 			const matchFromTimeToken = timeEnd > 0;
 			const patternSourceText = matchFromTimeToken ? plotLine.substring(timeEnd) : plotLine;
-			const lineAnchorToken = getLineAnchorTokenAfterTimestamp(patternSourceText);
+			const lineAnchorToken = normalizeLineAnchorToken(getLineAnchorTokenAfterTimestamp(patternSourceText));
 
 			// Generate a common pattern that captures ALL numbers
 			const patternResult = generateCommonPattern(patternSourceText);
@@ -2336,6 +3136,17 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (!safeRegExp(pattern, undefined, 'addVariableToPlot')) {
 				return;
 			}
+			plotDebug('FancyMon [plot] addVariableToPlot —', {
+				variableMatchStart: timeEnd,
+				matchFromTimeToken: matchFromTimeToken,
+				patternSourceLen: patternSourceText.length,
+				patternSourceHead: plotHead(patternSourceText, 80),
+				anchor: lineAnchorToken || 'none',
+				patternLen: pattern.length,
+				patternPrefix: pattern.slice(0, 160),
+				sortedNumberCount: sortedNumbers.length,
+				selectedY: selectedNumbers.size
+			});
 
 			const usedY1Colors = new Set(plotVariables.filter(v => v.axis !== 'y2').map(v => v.color).filter(c => c));
 			const usedY2Colors = new Set(plotVariables.filter(v => v.axis === 'y2').map(v => v.color).filter(c => c));
@@ -2349,7 +3160,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 				// numIndex is the index in the *filtered* list shown in the UI (1..N).
 				// Since we generate the pattern from the portion after the time token, the extracted numbers
 				// in that substring are also indexed 1..N in the same order. So we map directly by n.index.
-				const targetNumInSorted = sortedNumbers.find(n => n.index === numIndex);
+				const targetNumInSorted = resolveSortedNumberForSelection(
+					numIndex,
+					sortedNumbers,
+					timeEnd,
+					matchFromTimeToken
+				);
 				if (!targetNumInSorted) return;
 				
 				const captureIndex = sortedNumbers.indexOf(targetNumInSorted) + 1;
@@ -2369,9 +3185,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				if (!name) {
 					const numObj = extractedNumbers.find(n => n.index === numIndex);
 					if (numObj) {
-						// numObj.position is in plainText (full stripped text).
-						// For name extraction, use the FULL plainText (not patternSourceText).
-						const suggested = suggestVariableNameFromContext(plainText, numObj.position);
+						// numObj.position is in plotLine space (same as updateExtractionPreview).
+						const suggested = suggestVariableNameFromContext(plotLine, numObj.position);
 						name = suggested || numObj.text;
 					} else {
 						name = 'variable' + numIndex;
@@ -2400,12 +3215,10 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// IMPORTANT: extractedNumbers positions are in plainText (full text), but we need position in patternSourceText.
 					// If matchFromTimeToken, we need to find the number's position in patternSourceText.
 					let keyPosition;
-					// plotLine = plainText.slice(1); positions in patternSourceText use plotLine indices.
-					const posInPlotLine = numObjForKey.position >= 1 ? numObjForKey.position - 1 : 0;
 					if (matchFromTimeToken) {
-						keyPosition = posInPlotLine - timeEnd;
+						keyPosition = numObjForKey.position - timeEnd;
 					} else {
-						keyPosition = posInPlotLine;
+						keyPosition = numObjForKey.position;
 					}
 					if (keyPosition >= 0 && keyPosition < patternSourceText.length) {
 						keyName = suggestVariableNameFromContext(patternSourceText, keyPosition);
@@ -2436,7 +3249,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 					id: Date.now() + '-' + numIndex,
 					name: name,
 					pattern: pattern,
-					regex: regex, // Re-use the same regex object? No, better new one or share string
+					regex: regex,
+					variableMatchStart: timeEnd,
 					// Actually, for caching in processLineForPlot, we key by pattern string.
 					// So it doesn't matter if regex object is different, as long as pattern string is same.
 					captureIndex: captureIndex,
@@ -2451,7 +3265,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 				};
 
 				plotVariables.push(variable);
-				
+				if (PLOT_MATCH_DEBUG) {
+					const probePlain = plainText;
+					plotDebug('FancyMon [plot] addVariableToPlot — series added', {
+						name: variable.name,
+						axis: axisKey,
+						captureIndex: captureIndex,
+						keyName: keyName,
+						keyRegex: keyRegex ? keyRegex.source.slice(0, 100) : null,
+						lineAnchorToken: lineAnchorToken,
+						matchFromTimeToken: matchFromTimeToken,
+						variableMatchStart: timeEnd,
+						calibrationProbe: probeVariableMatchOnPlainText(probePlain, variable)
+					});
+				}
+
 				// Initialize chart if needed and add trace
 				if (!plotInitialized && plotDiv && typeof Plotly !== 'undefined') {
 					initializeChart();
@@ -2811,7 +3639,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const TEST_POINTS = 1000;
 			const Y1_COUNT = 15;
 			const Y2_COUNT = 15;
-			const dummyPattern = '(\\d+)';
+			const dummyPattern = ${JSON.stringify(WEBVIEW_INJECTED_REGEX.digitsCapture)};
 			if (!safeRegExp(dummyPattern, undefined, 'loadTestPlotData')) {
 				return;
 			}
@@ -2991,10 +3819,11 @@ export function getWebviewContentHtml(cspSource: string): string {
 						const usedY1Colors = new Set();
 						const usedY2Colors = new Set();
 
-						// Same as addVariableToPlot / processLineForPlot: time token end is on plotLine (line without first char).
+						// Same as addVariableToPlot / processLineForPlot: time token end is on plotLine (severity stripped unless line starts with '[').
 						const plainText = stripAnsiCodes(extractionPattern);
-						const plotLine = plainText && plainText.length > 0 ? plainText.slice(1) : plainText;
-						const timeEnd = plainText ? getTimeTokenEndIndexForLine(plotLine) : 0;
+						const plotBase = normalizePatternPlainTextForVariableExtraction(plainText);
+						const plotLine = plotLineForTimeAndVariables(plotBase);
+						const timeEnd = plotBase ? getTimeTokenEndIndexForLine(plotLine) : 0;
 						
 						session.variables.forEach((savedVar, idx) => {
 							const regex = safeRegExp(savedPattern, undefined, 'loadSession: variable');
@@ -3121,6 +3950,22 @@ export function getWebviewContentHtml(cspSource: string): string {
 					return null;
 				}
 
+				// Host wall time: parse first [HH:MM:SS.mmm] on the full line (injected host clock when system timestamps are on).
+				if (isBracketWallTimePatternText(timePattern)) {
+					const wallSeg = tryParseBracketedRtcDatetime(line);
+					if (wallSeg && wallSeg.iso) {
+						return wallSeg.iso;
+					}
+					const rx = tryCreateTimeRegex();
+					if (rx) {
+						const m = rx.exec(line);
+						if (m && m[1] && isBracketedWallTimeOnly(String(m[1]).trim())) {
+							return getWallTimeSessionDateStr() + 'T' + String(m[1]).trim();
+						}
+					}
+					// Do not return null yet — fall through to bracket scanner below.
+				}
+
 				const regex = tryCreateTimeRegex();
 				if (!regex) {
 					return null;
@@ -3138,16 +3983,21 @@ export function getWebviewContentHtml(cspSource: string): string {
 						return isoCandidate;
 					}
 
+					// Host wall time "HH:MM:SS.mmm" (system timestamp capture group)
+					if (isBracketedWallTimeOnly(trimmed)) {
+						return getWallTimeSessionDateStr() + 'T' + trimmed;
+					}
+
 					// Numeric uptime
 					const num = parseFloat(raw);
 					return isNaN(num) ? null : num;
 				}
 
-				// Fallback for RTC datetime
+				// Fallback for bracketed RTC or host wall time (regex mismatch / escaping)
 				// Use tryParseBracketedRtcDatetime instead of regex to avoid escaping issues
 				const rtcFallback = tryParseBracketedRtcDatetime(line);
-				if (rtcFallback && rtcFallback.inner) {
-					return rtcFallback.inner.replace(' ', 'T');
+				if (rtcFallback && rtcFallback.iso) {
+					return rtcFallback.iso;
 				}
 			} catch (e) {
 				console.error('Error extracting time:', e);
@@ -3164,9 +4014,24 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (!options.ignorePause && isPlotPaused) return false;
 			const restrictIds = options.restrictToVariableIds;
 
-			const plainText = stripAnsiCodes(line);
+			const plainText = plainTextForPlotProcessing(line);
 			const timeValue = extractTimeValue(plainText);
+			const stats = options.plotMatchStats;
+			if (stats) {
+				stats.lines = (stats.lines || 0) + 1;
+			}
 			if (timeValue === null) {
+				if (stats) {
+					stats.noTime = (stats.noTime || 0) + 1;
+					if (!stats.loggedNoTimeSample) {
+						stats.loggedNoTimeSample = true;
+						plotDebug('FancyMon [plot] buffer scan — first line with no time:', {
+							plainHead: plotHead(plainText),
+							timeAxis: getPlotTimeAxisDebug()
+						});
+						dumpPlotMatchPipeline('no-time sample', plainText, {});
+					}
+				}
 				return false;
 			}
 
@@ -3179,10 +4044,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			const matchCache = new Map();
 			const matchCacheAfterTime = new Map();
 
-			// Variable regex runs on plotLine (full line minus first char, e.g. severity letter).
-			const plotLine = plainText.length > 0 ? plainText.slice(1) : plainText;
-			const timeEnd = getTimeTokenEndIndexForLine(plotLine);
-			const afterTimeText = timeEnd > 0 ? plotLine.substring(timeEnd) : '';
+			// Variable regex runs on plotLine (full line minus severity letter, unless line starts with '[').
+			// Strip FancyMon's injected host clock first so it matches pattern calibration when the toggle is on.
+			const plotBase = plotBaseForVariableMatching(plainText);
+			const plotLine = plotLineForTimeAndVariables(plotBase);
+			const timeEnd = resolveVariableMatchStartIndex(plotLine, plotBase);
+			const afterTimeText = timeEnd > 0 ? plotLine.substring(timeEnd) : plotLine;
 			
 			plotVariables.forEach((variable, index) => {
 				try {
@@ -3200,7 +4067,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 						}
 					}
 					
-					// Prefer key-based extraction when available.
+					// Prefer key-based extraction when available; fall back to the shared line pattern if needed.
 					if (variable.keyRegex) {
 						variable.keyRegex.lastIndex = 0;
 						match = variable.keyRegex.exec(matchText);
@@ -3213,8 +4080,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 								}
 								chartNeedsUpdate = true;
 							}
+							return;
 						}
-						return;
 					}
 
 					// Optimization: Check cache first (not during buffer replay)
@@ -3257,6 +4124,26 @@ export function getWebviewContentHtml(cspSource: string): string {
 				}
 			});
 
+			if (stats) {
+				if (chartNeedsUpdate) {
+					stats.matchedLines = (stats.matchedLines || 0) + 1;
+				} else if (!stats.loggedMissSample && restrictIds) {
+					const probeVars = plotVariables.filter(function (v) {
+						return restrictIds.has(v.id);
+					});
+					if (probeVars.length > 0) {
+						stats.loggedMissSample = true;
+						plotDebug('FancyMon [plot] buffer scan — first line with time but no series match:', {
+							plainHead: plotHead(plainText),
+							timeValue: timeValue
+						});
+						probeVars.forEach(function (v) {
+							plotDebug('FancyMon [plot] buffer scan — probe', probeVariableMatchOnPlainText(plainText, v));
+						});
+					}
+				}
+			}
+
 			if (!options.batchMode) {
 				if (chartNeedsUpdate && plotInitialized && plotDiv) {
 					updateChart();
@@ -3268,9 +4155,42 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return chartNeedsUpdate;
 		}
 
+		function autoSelectAllExtractedNumbersForPlot() {
+			if (!extractedNumbers || extractedNumbers.length === 0) {
+				return false;
+			}
+			selectedNumbers.clear();
+			extractedNumbers.forEach(function (num) {
+				selectedNumbers.set(num.index, 'y');
+			});
+			if (numberSelector) {
+				const rows = numberSelector.querySelectorAll('.number-selection-row');
+				rows.forEach(function (row) {
+					const y1 = row.querySelector('input[type="checkbox"]');
+					if (y1) {
+						y1.checked = true;
+					}
+				});
+			}
+			if (addVariableBtn) {
+				addVariableBtn.disabled = false;
+			}
+			syncFindButtonToAddNewOnlyButton();
+			return true;
+		}
+
 		function findAndAddAllMatchingFromBuffer() {
 			// Always log first so DevTools proves the handler ran (even on early exit).
 			console.log('FancyMon: Find and Add All — run started | plotVariables:', plotVariables.length, '| rawLines:', rawLines ? rawLines.length : 0);
+			if (
+				patternInput &&
+				patternInput.value.trim().length > 0 &&
+				selectedNumbers.size === 0 &&
+				extractedNumbers.length > 0
+			) {
+				console.log('FancyMon: Find and Add All — no Y1/Y2 selected; selecting all extracted numbers.');
+				autoSelectAllExtractedNumbersForPlot();
+			}
 			const hadPatternSelection =
 				patternInput && patternInput.value.trim().length > 0 && selectedNumbers.size > 0;
 			const variableCountBeforeAdd = plotVariables.length;
@@ -3305,6 +4225,19 @@ export function getWebviewContentHtml(cspSource: string): string {
 			}
 			let needsChart = false;
 			const scanOpts = { ignorePause: true, batchMode: true };
+			if (PLOT_MATCH_DEBUG) {
+				scanOpts.plotMatchStats = {
+					lines: 0,
+					noTime: 0,
+					matchedLines: 0
+				};
+				plotDebug('FancyMon [plot] Find and Add All — scan context', {
+					systemTimestampEnabled: !!systemTimestampEnabled,
+					timeAxis: getPlotTimeAxisDebug(),
+					includeFilter: typeof filterPattern === 'string' ? filterPattern : '',
+					bufferLines: rawLines.length
+				});
+			}
 			if (restrictToVariableIds) {
 				scanOpts.restrictToVariableIds = restrictToVariableIds;
 			}
@@ -3313,7 +4246,49 @@ export function getWebviewContentHtml(cspSource: string): string {
 					needsChart = true;
 				}
 			}
-			console.log('FancyMon: Find and Add All — scanned', rawLines.length, 'buffer lines; chart update:', needsChart);
+			if (scanOpts.plotMatchStats) {
+				plotDebug('FancyMon [plot] Find and Add All — buffer scan stats', scanOpts.plotMatchStats);
+			}
+			let pointsAdded = 0;
+			if (restrictToVariableIds) {
+				plotVariables.forEach(function (v) {
+					if (restrictToVariableIds.has(v.id)) {
+						pointsAdded += v.data.length;
+					}
+				});
+			}
+			console.log(
+				'FancyMon: Find and Add All — scanned',
+				rawLines.length,
+				'buffer lines; chart update:',
+				needsChart,
+				'| new-series points:',
+				pointsAdded
+			);
+			if (plotVariables.length > 0 && !needsChart && pointsAdded === 0) {
+				const sample = plotVariables[plotVariables.length - 1];
+				const newVars =
+					restrictToVariableIds && restrictToVariableIds.size > 0
+						? plotVariables.filter(function (v) {
+								return restrictToVariableIds.has(v.id);
+							})
+						: plotVariables;
+				console.warn(
+					'FancyMon: Find and Add All — no points matched. anchor=' +
+						(sample.lineAnchorToken || 'none') +
+						' matchFromTimeToken=' +
+						sample.matchFromTimeToken +
+						' variableMatchStart=' +
+						(sample.variableMatchStart || 0) +
+						' key=' +
+						(sample.keyName || 'none') +
+						' patternLen=' +
+						(sample.pattern ? sample.pattern.length : 0) +
+						' patternPrefix=' +
+						(sample.pattern ? sample.pattern.slice(0, 100) : '')
+				);
+				diagnosePlotMatchFailure(newVars);
+			}
 			if (needsChart && plotInitialized && plotDiv) {
 				updateChart();
 			}
@@ -3472,9 +4447,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 
 		// Filter functions (inline for browser JavaScript)
 		function stripAnsiCodes(text) {
-			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
-			const ansiRegex = new RegExp(pattern, 'g');
-			return text.replace(ansiRegex, '');
+			return text.replace(new RegExp(FANCYMON_STRIP_ANSI_PATTERN, 'g'), '');
 		}
 
 		function safeRegExp(pattern, flags, context) {
@@ -3607,7 +4580,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		function linkifyFileLineRefs(html) {
 			if (!html || typeof html !== 'string') return html;
 			// Match path-like segments with common source extensions followed by :digits (path may contain / \ . - _ alphanumeric)
-			const fileLineRegex = /([a-zA-Z0-9_./\\\\-]+\\.(?:c|cpp|h|hpp|hxx|cxx|cc|ts|tsx|js|jsx|py|rs|go|java|kt|swift|m|mm|s|S)):(\\d+)/g;
+			const fileLineRegex = new RegExp(${JSON.stringify(WEBVIEW_INJECTED_REGEX.fileLineRef)}, 'g');
 			return html.replace(fileLineRegex, (full, filePath, lineNum) => {
 				return '<a href="#" class="file-line-link" data-path="' + escapeHtmlAttribute(filePath) + '" data-line="' + lineNum + '">' + escapeHtml(full) + '</a>';
 			});
@@ -3625,11 +4598,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		function parseAnsi(text, initialState = null) {
-			// ANSI escape sequence: ESC[ (0x1B)
-			// Use character code escape sequence in regex pattern string
-			// \\x1b = literal "\x1b" sequence for RegExp constructor
-			const pattern = '\\\\x1b\\\\[([0-9;]*)([a-zA-Z])';
-			const ansiRegex = new RegExp(pattern, 'g');
+			const ansiRegex = new RegExp(FANCYMON_PARSE_ANSI_PATTERN, 'g');
 			let lastIndex = 0;
 			let result = '';
 			// Use provided initial state or current global state
@@ -3957,6 +4926,38 @@ export function getWebviewContentHtml(cspSource: string): string {
 			lineUsage.style.color = color;
 		}
 
+		function applyLineWrapState() {
+			if (!monitor || !toggleWrapBtn) return;
+			if (lineWrapEnabled) {
+				monitor.classList.remove('no-wrap');
+				toggleWrapBtn.classList.add('active');
+			} else {
+				monitor.classList.add('no-wrap');
+				toggleWrapBtn.classList.remove('active');
+			}
+			toggleWrapBtn.title = lineWrapEnabled ? 'Line wrapping enabled (click to disable)' : 'Line wrapping disabled (click to enable)';
+		}
+
+		function applySystemTimestampState() {
+			if (!toggleSystemTimestampBtn) return;
+			if (systemTimestampEnabled) {
+				toggleSystemTimestampBtn.classList.add('active');
+			} else {
+				toggleSystemTimestampBtn.classList.remove('active');
+			}
+			toggleSystemTimestampBtn.title = systemTimestampEnabled ? 'System timestamps enabled (click to disable)' : 'System timestamps disabled (click to enable)';
+			toggleSystemTimestampBtn.setAttribute('aria-pressed', systemTimestampEnabled ? 'true' : 'false');
+		}
+
+		function prependSystemTimestamp(line) {
+			if (!systemTimestampEnabled) return line;
+			if (!line || line.trim() === '') return line;
+			if (line.includes('[[ PAUSED ') || line.includes('[[ RESUMED ')) {
+				return line;
+			}
+			return '[' + formatTimestamp() + '] ' + line;
+		}
+
 		// Buffer for incomplete lines (data that doesn't end with newline)
 		let lineBuffer = '';
 		
@@ -3997,7 +4998,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			let linesAdded = lines.length;
 			let sawConnectedStatusLine = false;
 			for (const line of lines) {
-				const completeLine = line + newlineChar;
+				const completeLine = prependSystemTimestamp(line) + newlineChar;
 				rawLines.push(completeLine);
 				lineCount++;
 				if (completeLine.includes('[[ CONNECTED ]]')) {
@@ -4778,20 +5779,23 @@ export function getWebviewContentHtml(cspSource: string): string {
 		if (toggleWrapBtn && monitor) {
 			toggleWrapBtn.addEventListener('click', () => {
 				lineWrapEnabled = !lineWrapEnabled;
-				if (lineWrapEnabled) {
-					monitor.classList.remove('no-wrap');
-					toggleWrapBtn.classList.add('active');
-					toggleWrapBtn.title = 'Line wrapping enabled (click to disable)';
-				} else {
-					monitor.classList.add('no-wrap');
-					toggleWrapBtn.classList.remove('active');
-					toggleWrapBtn.title = 'Line wrapping disabled (click to enable)';
-				}
+				applyLineWrapState();
 				
 				// Save wrap state
 				vscode.postMessage({
 					command: 'updateWrapState',
 					lineWrapEnabled: lineWrapEnabled
+				});
+			});
+		}
+
+		if (toggleSystemTimestampBtn) {
+			toggleSystemTimestampBtn.addEventListener('click', () => {
+				systemTimestampEnabled = !systemTimestampEnabled;
+				applySystemTimestampState();
+				vscode.postMessage({
+					command: 'updateTimestampState',
+					systemTimestampEnabled: systemTimestampEnabled
 				});
 			});
 		}
@@ -4951,11 +5955,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		saveBtn.addEventListener('click', () => {
-			// Get raw text content (remove ANSI codes for saving)
-			// Use character code escape sequence in regex pattern string
-			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
-			const ansiRegex = new RegExp(pattern, 'g');
-			const content = (rawLines.join('') + lineBuffer).replace(ansiRegex, '');
+			const content = stripAnsiCodes(rawLines.join('') + lineBuffer);
 			
 			if (content.trim().length === 0) {
 				vscode.postMessage({ command: 'error', message: 'No data to save' });
@@ -4993,10 +5993,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 		}
 
 		copyAllBtn.addEventListener('click', () => {
-			// Copy all raw lines (remove ANSI codes)
-			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
-			const ansiRegex = new RegExp(pattern, 'g');
-			const content = (rawLines.join('') + lineBuffer).replace(ansiRegex, '');
+			const content = stripAnsiCodes(rawLines.join('') + lineBuffer);
 			
 			if (content.trim().length === 0) {
 				vscode.postMessage({ command: 'error', message: 'No data to copy' });
@@ -5027,9 +6024,6 @@ export function getWebviewContentHtml(cspSource: string): string {
 			// Apply filter
 			const filteredEntries = applyFilter(lineEntries, filterPattern, excludeFilterPattern);
 			
-			// Strip ANSI codes and join
-			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
-			const ansiRegex = new RegExp(pattern, 'g');
 			const content = filteredEntries.map(entry => stripAnsiCodes(entry.text)).join('');
 			
 			if (content.trim().length === 0) {
@@ -5091,10 +6085,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return;
 			}
 			
-			// Strip ANSI codes and join
-			const pattern = '\\\\x1b\\\\[[0-9;]*[a-zA-Z]';
-			const ansiRegex = new RegExp(pattern, 'g');
-			const content = visibleLines.join('').replace(ansiRegex, '');
+			const content = stripAnsiCodes(visibleLines.join(''));
 			
 			if (content.trim().length === 0) {
 				vscode.postMessage({ command: 'error', message: 'No visible data to copy' });
@@ -5729,16 +6720,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 							// Restore wrap state
 							if (message.lineWrapEnabled !== undefined) {
 								lineWrapEnabled = message.lineWrapEnabled;
-								if (monitor && toggleWrapBtn) {
-									if (lineWrapEnabled) {
-										monitor.classList.remove('no-wrap');
-										toggleWrapBtn.classList.add('active');
-									} else {
-										monitor.classList.add('no-wrap');
-										toggleWrapBtn.classList.remove('active');
-									}
-									toggleWrapBtn.title = lineWrapEnabled ? 'Line wrapping enabled (click to disable)' : 'Line wrapping disabled (click to enable)';
-								}
+								applyLineWrapState();
+							}
+
+							// Restore local timestamp state
+							if (message.systemTimestampEnabled !== undefined) {
+								systemTimestampEnabled = message.systemTimestampEnabled;
+								applySystemTimestampState();
 							}
 							
 							// Auto-connect if we have a valid configuration
@@ -5771,16 +6759,13 @@ export function getWebviewContentHtml(cspSource: string): string {
 					// Restore wrap state (even if no ports/config available)
 					if (message.lineWrapEnabled !== undefined) {
 						lineWrapEnabled = message.lineWrapEnabled;
-						if (monitor && toggleWrapBtn) {
-							if (lineWrapEnabled) {
-								monitor.classList.remove('no-wrap');
-								toggleWrapBtn.classList.add('active');
-							} else {
-								monitor.classList.add('no-wrap');
-								toggleWrapBtn.classList.remove('active');
-							}
-							toggleWrapBtn.title = lineWrapEnabled ? 'Line wrapping enabled (click to disable)' : 'Line wrapping disabled (click to enable)';
-						}
+						applyLineWrapState();
+					}
+
+					// Restore local timestamp state (even if no ports/config available)
+					if (message.systemTimestampEnabled !== undefined) {
+						systemTimestampEnabled = message.systemTimestampEnabled;
+						applySystemTimestampState();
 					}
 					
 					updateUI();

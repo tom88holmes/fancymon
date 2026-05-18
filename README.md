@@ -65,6 +65,10 @@ None at this time. If you encounter any issues, please report them on the extens
 
 ## Release Notes
 
+### 0.0.7
+
+Plot traces now use a shared line-and-circle marker style for both initial traces and traces added later, so points are easier to see at a glance.
+
 ### 0.0.6
 
 Major improvements to plotting functionality and session management:

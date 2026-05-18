@@ -16,6 +16,7 @@ export interface SerialMonitorConfig {
 	parity: 'none' | 'even' | 'odd';
 	maxLines?: number;
 	lineWrapEnabled?: boolean;
+	systemTimestampEnabled?: boolean;
 }
 
 
@@ -26,6 +27,7 @@ export class SerialMonitor {
 	private lineProcessingQueue: Promise<void> = Promise.resolve();
 	private readonly configKey = 'fancymon.lastConfig';
 	private readonly wrapStateKey = 'fancymon.lineWrapEnabled';
+	private readonly timestampStateKey = 'fancymon.systemTimestampEnabled';
 	private readonly messageHistoryKey = 'fancymon.messageHistory';
 	private readonly includeFilterHistoryKey = 'fancymon.includeFilterHistory';
 	private readonly excludeFilterHistoryKey = 'fancymon.excludeFilterHistory';
@@ -178,6 +180,10 @@ export class SerialMonitor {
 					case 'updateWrapState':
 						// Update wrap state in separate storage
 						this.context.workspaceState.update(this.wrapStateKey, message.lineWrapEnabled);
+						break;
+					case 'updateTimestampState':
+						// Update local timestamp toggle state in separate storage
+						this.context.workspaceState.update(this.timestampStateKey, message.systemTimestampEnabled);
 						break;
 					case 'updateMessageHistory':
 						// Save message history
@@ -429,6 +435,8 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 			
 			// Get wrap state from separate storage (default to true if not set)
 			const wrapState = this.context.workspaceState.get<boolean>(this.wrapStateKey) ?? true;
+			// Get local timestamp toggle state (default to false if not set)
+			const timestampState = this.context.workspaceState.get<boolean>(this.timestampStateKey) ?? false;
 			
 			// Get message history
 			const messageHistory = this.context.workspaceState.get<string[]>(this.messageHistoryKey) || [];
@@ -451,7 +459,8 @@ I (697) octal_psram: good-die     : 0x01 (Pass)
 				command: 'portsListed',
 				ports: ports,
 				lastConfig: lastConfig,
-				lineWrapEnabled: wrapState
+				lineWrapEnabled: wrapState,
+				systemTimestampEnabled: timestampState
 			});
 			
 			// Send message history separately
