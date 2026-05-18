@@ -65,6 +65,16 @@ None at this time. If you encounter any issues, please report them on the extens
 
 ## Release Notes
 
+### 0.0.8
+
+Log viewing and packaging improvements:
+
+- **Log Search**: Search the visible log with match highlighting, previous/next navigation, match count, and search history.
+- **System Timestamps**: Optional host-clock timestamps on incoming lines, toggled from the monitor toolbar.
+- **Text Selection**: Select and copy log text reliably while new data is still streaming in.
+- **UTF-8 Decoding**: Improved multi-byte character handling across serial RX chunks (fixes garbled Chinese and other non-ASCII text; see GitHub issue #1).
+- **Packaging Fix**: The published VSIX now includes the `serialport` native dependency so port listing and connections work on a clean install without running `npm install`.
+
 ### 0.0.7
 
 Plot traces now use a shared line-and-circle marker style for both initial traces and traces added later, so points are easier to see at a glance.
