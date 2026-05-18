@@ -4490,6 +4490,147 @@ export function getWebviewContentHtml(cspSource: string): string {
 			return filtered;
 		}
 
+		function lineMatchesActiveFilter(lineText, includePattern, excludePattern) {
+			const plainText = stripAnsiCodes(lineText || '');
+			if (includePattern && includePattern.trim() !== '') {
+				const includePatterns = includePattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
+				if (includePatterns.length > 0 && !includePatterns.some(pattern => plainText.includes(pattern))) {
+					return false;
+				}
+			}
+			if (excludePattern && excludePattern.trim() !== '') {
+				const excludePatterns = excludePattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
+				if (excludePatterns.length > 0 && excludePatterns.some(pattern => plainText.includes(pattern))) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		function hasMonitorTextSelection() {
+			const selection = window.getSelection();
+			if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+				return false;
+			}
+			const range = selection.getRangeAt(0);
+			return !!(monitor && range.commonAncestorContainer && monitor.contains(range.commonAncestorContainer));
+		}
+
+		function getLineElementForSelectionNode(node) {
+			if (!node) return null;
+			const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+			return el ? el.closest('.line') : null;
+		}
+
+		function getOffsetInLineElement(lineEl, container, offset) {
+			const range = document.createRange();
+			range.selectNodeContents(lineEl);
+			range.setEnd(container, offset);
+			return range.toString().length;
+		}
+
+		function monitorSelectionPointFromNode(node, offset) {
+			const lineEl = getLineElementForSelectionNode(node);
+			if (!lineEl || !monitor || !monitor.contains(lineEl)) {
+				return null;
+			}
+			const lineNumberAttr = lineEl.getAttribute('data-line');
+			return {
+				lineNumber: lineNumberAttr ? parseInt(lineNumberAttr, 10) : null,
+				isBuffer: lineEl.classList.contains('line-buffer'),
+				offset: getOffsetInLineElement(lineEl, node, offset)
+			};
+		}
+
+		function captureMonitorSelection() {
+			const selection = window.getSelection();
+			if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+				return null;
+			}
+			const range = selection.getRangeAt(0);
+			if (!monitor || !monitor.contains(range.commonAncestorContainer)) {
+				return null;
+			}
+			const anchor = monitorSelectionPointFromNode(range.startContainer, range.startOffset);
+			const focus = monitorSelectionPointFromNode(range.endContainer, range.endOffset);
+			if (!anchor || !focus) {
+				return null;
+			}
+			return { anchor, focus };
+		}
+
+		function findLineElementForSelectionPoint(point) {
+			if (!monitorContent || !point) return null;
+			if (point.isBuffer) {
+				return monitorContent.querySelector('.line-buffer');
+			}
+			if (point.lineNumber === null || point.lineNumber === undefined) {
+				return null;
+			}
+			return monitorContent.querySelector('.line[data-line="' + point.lineNumber + '"]');
+		}
+
+		function setRangeBoundaryFromSelectionPoint(range, boundary, point) {
+			const lineEl = findLineElementForSelectionPoint(point);
+			if (!lineEl) return false;
+			const textNodes = [];
+			const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+			let textNode = walker.nextNode();
+			while (textNode) {
+				textNodes.push(textNode);
+				textNode = walker.nextNode();
+			}
+			if (textNodes.length === 0) {
+				range[boundary](lineEl, 0);
+				return true;
+			}
+			let remaining = Math.max(0, point.offset);
+			for (let i = 0; i < textNodes.length; i++) {
+				const tn = textNodes[i];
+				const len = tn.textContent.length;
+				if (remaining <= len || i === textNodes.length - 1) {
+					range[boundary](tn, Math.min(remaining, len));
+					return true;
+				}
+				remaining -= len;
+			}
+			return false;
+		}
+
+		function restoreMonitorSelection(snapshot) {
+			if (!snapshot || !monitor) return;
+			try {
+				const selection = window.getSelection();
+				if (!selection) return;
+				const range = document.createRange();
+				if (!setRangeBoundaryFromSelectionPoint(range, 'setStart', snapshot.anchor)) return;
+				if (!setRangeBoundaryFromSelectionPoint(range, 'setEnd', snapshot.focus)) return;
+				selection.removeAllRanges();
+				selection.addRange(range);
+			} catch (e) {
+				// Ignore invalid restore (e.g. trimmed line no longer in DOM)
+			}
+		}
+
+		function scrollMonitorToBottomIfFollowing() {
+			if (!monitor || !isFollowing || pendingScroll || hasMonitorTextSelection()) {
+				return;
+			}
+			pendingScroll = true;
+			isProgrammaticScroll = true;
+			requestAnimationFrame(() => {
+				if (monitor && isFollowing && !hasMonitorTextSelection()) {
+					const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
+					lastScrollTop = newScrollTop;
+					monitorScrollWrap.scrollTop = newScrollTop;
+					setTimeout(() => {
+						isProgrammaticScroll = false;
+					}, 50);
+				}
+				pendingScroll = false;
+			});
+		}
+
 		function getBaudRate() {
 			if (customBaudRate.value && parseInt(customBaudRate.value) > 0) {
 				return parseInt(customBaudRate.value);
@@ -4976,6 +5117,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 				return; // Exit silently, don't process data during disconnect
 			}
 			
+			const previousLineBuffer = lineBuffer;
 			// Append new data to buffer
 			lineBuffer += data;
 			
@@ -4996,10 +5138,12 @@ export function getWebviewContentHtml(cspSource: string): string {
 			
 			// Add complete lines to raw storage
 			let linesAdded = lines.length;
+			const addedCompleteLines = [];
 			let sawConnectedStatusLine = false;
 			for (const line of lines) {
 				const completeLine = prependSystemTimestamp(line) + newlineChar;
 				rawLines.push(completeLine);
+				addedCompleteLines.push(completeLine);
 				lineCount++;
 				if (completeLine.includes('[[ CONNECTED ]]')) {
 					sawConnectedStatusLine = true;
@@ -5085,13 +5229,41 @@ export function getWebviewContentHtml(cspSource: string): string {
 			if (isFrozenView) {
 				unfreezeView();
 			}
+
+			// In filtered mode, avoid full DOM re-render when incoming data doesn't
+			// change what is currently visible. This keeps drag-selection stable.
+			const hasActiveFilter = !!filterPattern || !!excludeFilterPattern;
+			if (isFollowing && hasActiveFilter && !needsFullRender) {
+				let filteredDisplayChanged = false;
+				for (const addedLine of addedCompleteLines) {
+					if (lineMatchesActiveFilter(addedLine, filterPattern, excludeFilterPattern)) {
+						filteredDisplayChanged = true;
+						break;
+					}
+				}
+				if (!filteredDisplayChanged) {
+					const hadVisibleBuffer = !!previousLineBuffer && lineMatchesActiveFilter(previousLineBuffer, filterPattern, excludeFilterPattern);
+					const hasVisibleBuffer = !!lineBuffer && lineMatchesActiveFilter(lineBuffer, filterPattern, excludeFilterPattern);
+					if (hadVisibleBuffer !== hasVisibleBuffer) {
+						filteredDisplayChanged = true;
+					} else if (hadVisibleBuffer && hasVisibleBuffer && previousLineBuffer !== lineBuffer) {
+						filteredDisplayChanged = true;
+					}
+				}
+				if (!filteredDisplayChanged) {
+					return;
+				}
+			}
 			
-			// Optimize: only append new lines if we're following and no filter is active
-			// and we haven't trimmed lines or changed filter
-			if (isFollowing && !filterPattern && !excludeFilterPattern && !needsFullRender && lastRenderedLineIndex >= 0) {
-				appendNewLinesOnly(linesAdded);
+			// Optimize: append new lines incrementally when following (avoids full DOM rebuild)
+			if (isFollowing && !needsFullRender && lastRenderedLineIndex >= 0) {
+				if (!filterPattern && !excludeFilterPattern) {
+					appendNewLinesOnly(linesAdded);
+				} else {
+					appendNewFilteredLinesOnly();
+				}
 			} else {
-				// Full render needed (filter active, lines trimmed, or first render)
+				// Full render needed (lines trimmed, filter changed, or first render)
 				needsFullRender = false;
 				renderLinesWithBuffer();
 			}
@@ -5164,27 +5336,79 @@ export function getWebviewContentHtml(cspSource: string): string {
 			lastRenderedLineIndex = endIndex - 1;
 			currentAnsiState = state;
 			updateScrollbarEventMarks();
-			
-			// Scroll to bottom - use requestAnimationFrame to batch scroll operations
-			// This prevents blocking if multiple batches arrive quickly
-			if (!pendingScroll) {
-				pendingScroll = true;
-				isProgrammaticScroll = true; // Mark as programmatic scroll
-				requestAnimationFrame(() => {
-					if (monitor && isFollowing) {
-						const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
-						lastScrollTop = newScrollTop; // Update BEFORE scrolling to prevent handler from thinking we scrolled up
-						monitorScrollWrap.scrollTop = newScrollTop;
-						// Reset flag after a short delay to allow scroll event to process
-						setTimeout(() => {
-							isProgrammaticScroll = false;
-						}, 50);
-					}
-					pendingScroll = false;
-				});
+			scrollMonitorToBottomIfFollowing();
+		}
+
+		// Append only new filter-matching lines (filtered mode, following)
+		function appendNewFilteredLinesOnly() {
+			if (!monitor || !monitorContent) return;
+
+			const existingBuffer = monitorContent.querySelector('.line-buffer');
+			if (existingBuffer) {
+				existingBuffer.remove();
 			}
+
+			const startIndex = Math.max(0, lastRenderedLineIndex + 1);
+			const endIndex = rawLines.length;
+			let state = currentAnsiState;
+			let html = '';
+
+			for (let idx = startIndex; idx < endIndex; idx++) {
+				const line = rawLines[idx];
+				const textForDisplay = line.endsWith(newlineChar) ? line.slice(0, -1) : line;
+				const result = parseAnsi(textForDisplay, state);
+				state = result.finalState;
+				if (lineMatchesActiveFilter(line, filterPattern, excludeFilterPattern)) {
+					const plainText = stripAnsiCodes(textForDisplay);
+					const escapedPlainText = escapeHtmlAttribute(plainText);
+					html += '<div class="line" data-line="' + (totalTrimmedLines + idx + 1) + '" data-text="' + escapedPlainText + '">' +
+						linkifyFileLineRefs(result.html) +
+						'</div>';
+				}
+			}
+
+			if (html) {
+				const tempDiv = document.createElement('div');
+				tempDiv.innerHTML = html;
+				const fragment = document.createDocumentFragment();
+				while (tempDiv.firstChild) {
+					fragment.appendChild(tempDiv.firstChild);
+				}
+				monitorContent.appendChild(fragment);
+			}
+
+			if (endIndex > startIndex) {
+				lastRenderedLineIndex = endIndex - 1;
+				currentAnsiState = state;
+			} else if (lineBuffer) {
+				updateFilteredBufferLine();
+				updateScrollbarEventMarks();
+				return;
+			}
+
+			updateFilteredBufferLine();
+			updateScrollbarEventMarks();
+			scrollMonitorToBottomIfFollowing();
 		}
 		
+		function updateFilteredBufferLine() {
+			if (!monitor || !monitorContent) return;
+			const existingBuffer = monitorContent.querySelector('.line-buffer');
+			if (existingBuffer) {
+				existingBuffer.remove();
+			}
+			if (!lineBuffer || !lineMatchesActiveFilter(lineBuffer, filterPattern, excludeFilterPattern)) {
+				return;
+			}
+			const textForDisplay = lineBuffer;
+			const result = parseAnsi(textForDisplay, currentAnsiState);
+			const bufferDiv = document.createElement('div');
+			bufferDiv.className = 'line line-buffer';
+			bufferDiv.innerHTML = linkifyFileLineRefs(result.html);
+			monitorContent.appendChild(bufferDiv);
+			currentAnsiState = result.finalState;
+		}
+
 		// Update only the buffer line (incomplete line at the end)
 		function updateBufferLine() {
 			if (!monitor || !lineBuffer) return;
@@ -5203,23 +5427,7 @@ export function getWebviewContentHtml(cspSource: string): string {
 			bufferDiv.innerHTML = linkifyFileLineRefs(result.html);
 			monitorContent.appendChild(bufferDiv);
 			currentAnsiState = result.finalState;
-			
-			// Scroll to bottom if following - use throttled scroll
-			if (isFollowing && !pendingScroll) {
-				pendingScroll = true;
-				isProgrammaticScroll = true; // Mark as programmatic scroll
-				requestAnimationFrame(() => {
-					if (monitor && isFollowing) {
-						const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
-						lastScrollTop = newScrollTop; // Update BEFORE scrolling
-						monitorScrollWrap.scrollTop = newScrollTop;
-						setTimeout(() => {
-							isProgrammaticScroll = false;
-						}, 50);
-					}
-					pendingScroll = false;
-				});
-			}
+			scrollMonitorToBottomIfFollowing();
 		}
 		
 		function renderLinesWithBuffer(forcedAnchorLine, forcedAnchorOffset) {
@@ -5289,6 +5497,8 @@ export function getWebviewContentHtml(cspSource: string): string {
 				state = result.finalState; // Maintain state across lines
 			}
 			
+			const selectionSnapshot = captureMonitorSelection();
+			
 			// Update the monitor content (keeps scrollbar-indicator and scrollbar-event-marks)
 			if (monitorContent) monitorContent.innerHTML = html;
 			
@@ -5299,24 +5509,18 @@ export function getWebviewContentHtml(cspSource: string): string {
 			lastFilterPattern = filterPattern;
 			lastExcludeFilterPattern = excludeFilterPattern;
 			
+			function restoreSelectionAfterRender() {
+				if (selectionSnapshot) {
+					restoreMonitorSelection(selectionSnapshot);
+				}
+			}
+			
 			// Restore scroll position based on follow state
 			if (shouldStickToBottom) {
-			// Scroll to bottom - use throttled scroll for better performance
-			if (!pendingScroll) {
-				pendingScroll = true;
-				isProgrammaticScroll = true; // Mark as programmatic scroll
-				requestAnimationFrame(() => {
-					if (monitor && isFollowing) {
-						const newScrollTop = monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight;
-						lastScrollTop = newScrollTop; // Update BEFORE scrolling
-						monitorScrollWrap.scrollTop = newScrollTop;
-						setTimeout(() => {
-							isProgrammaticScroll = false;
-						}, 50);
-					}
-					pendingScroll = false;
-				});
-			}
+				scrollMonitorToBottomIfFollowing();
+				if (selectionSnapshot) {
+					requestAnimationFrame(restoreSelectionAfterRender);
+				}
 			} else {
 				let restored = false;
 				
@@ -5357,6 +5561,9 @@ export function getWebviewContentHtml(cspSource: string): string {
 					const maxScroll = Math.max(0, monitorScrollWrap.scrollHeight - monitorScrollWrap.clientHeight);
 					const targetTop = Math.min(previousScrollTop, maxScroll);
 					monitorScrollWrap.scrollTop = Math.max(0, targetTop);
+				}
+				if (selectionSnapshot) {
+					requestAnimationFrame(restoreSelectionAfterRender);
 				}
 			}
 			lastScrollTop = monitorScrollWrap.scrollTop;
