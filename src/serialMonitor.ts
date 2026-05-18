@@ -326,7 +326,9 @@ export class SerialMonitor {
 						{
 							const filePath = message.path as string;
 							const lineNum = typeof message.line === 'number' ? message.line : parseInt(String(message.line), 10);
-							if (!filePath || isNaN(lineNum) || lineNum < 1) break;
+							if (!filePath || isNaN(lineNum) || lineNum < 1) {
+								break;
+							}
 							const zeroBasedLine = lineNum - 1;
 							const isAbsolute = /^[A-Za-z]:[/\\]/.test(filePath) || filePath.startsWith('/');
 							(async () => {

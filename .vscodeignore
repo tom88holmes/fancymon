@@ -1,3 +1,4 @@
+# Keep production deps (serialport + @serialport/* native bindings) packaged — do not broad-ignore node_modules.
 .vscode/**
 .vscode-test/**
 out/**
