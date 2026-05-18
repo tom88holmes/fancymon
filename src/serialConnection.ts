@@ -1,4 +1,5 @@
 import type { SerialMonitorConfig } from './serialMonitor';
+import { TextDecoder } from 'node:util';
 
 type SerialPortType = any; // Will be the SerialPort type from serialport module
 
@@ -32,8 +33,21 @@ export class SerialConnection {
 	private pendingDataChunks = 0;
 	private disconnectStartTime = 0;
 	private lastDataReceivedTime = 0;
+	/** Decodes RX across chunk boundaries; per-chunk `Buffer.toString('utf8')` splits multi-byte chars (loopback / UART). */
+	private rxUtf8Decoder: InstanceType<typeof TextDecoder> | null = null;
 
 	constructor(private callbacks: SerialConnectionCallbacks) {}
+
+	private flushRxUtf8Decoder(): void {
+		if (!this.rxUtf8Decoder) {
+			return;
+		}
+		const tail = this.rxUtf8Decoder.decode();
+		this.rxUtf8Decoder = null;
+		if (tail.length > 0) {
+			this.callbacks.onData(tail);
+		}
+	}
 
 	private logDebug(message: string, ...args: any[]): void {
 		const formattedMsg = args.length > 0 ? `${message} ${args.map(a => JSON.stringify(a)).join(' ')}` : message;
@@ -136,6 +150,7 @@ export class SerialConnection {
 	private async connectAttempt(config: SerialMonitorConfig): Promise<void> {
 		// Reset connected message flag for new connection
 		this.hasSentConnectedMessage = false;
+		this.rxUtf8Decoder = new TextDecoder('utf-8', { fatal: false });
 
 		// Store port reference for cleanup in case of failure
 		let portForCleanup: SerialPortType | null = null;
@@ -164,18 +179,18 @@ export class SerialConnection {
 			this.pendingDataBytes = 0;
 			this.pendingDataChunks = 0;
 			this.dataHandler = (data: Buffer) => {
-				// ULTRA-CRITICAL: Check ALL flags FIRST before doing ANYTHING
-				// If ANY of these are false/null, exit immediately without any processing
-				if (!this.shouldProcessData || !this.isConnected || !this.port || this.isDisconnecting) {
-					// Exit silently - don't even log to avoid overhead
+				// Always advance the UTF-8 decoder when bytes arrive so chunk boundaries stay aligned
+				// with the wire, even if we later drop the decoded text (disconnect / not connected yet).
+				const decoder = this.rxUtf8Decoder;
+				const text = decoder ? decoder.decode(data, { stream: true }) : data.toString('utf8');
+				if (!text) {
 					return;
 				}
-				
-				const dataSize = data.length;
-				const timestamp = Date.now();
-				
-				// Process the data (removed verbose logging for performance)
-				this.callbacks.onData(data.toString());
+				// ULTRA-CRITICAL: Check ALL flags FIRST before forwarding to the UI
+				if (!this.shouldProcessData || !this.isConnected || !this.port || this.isDisconnecting) {
+					return;
+				}
+				this.callbacks.onData(text);
 			};
 
 			this.errorHandler = (err: any) => {
@@ -718,6 +733,11 @@ export class SerialConnection {
 			// The port is actually open and ready
 			this.isConnected = true;
 			this.callbacks.onConnected();
+			// Duplex readable can stay paused in some hosts until explicitly resumed; without this,
+			// RX (including physical TX→RX loopback) may never surface as 'data' events.
+			if (typeof (this.port as import('stream').Readable).resume === 'function') {
+				(this.port as import('stream').Readable).resume();
+			}
 			// Send status message only once (prevent duplicates)
 			if (!this.hasSentConnectedMessage) {
 				this.sendStatusMessage('[[ CONNECTED ]]');
@@ -767,7 +787,8 @@ export class SerialConnection {
 			this.dataHandler = null;
 			this.errorHandler = null;
 			this.closeHandler = null;
-			
+			this.rxUtf8Decoder = null;
+
 			// Re-throw error so caller knows connection failed
 			throw error;
 		}
@@ -849,6 +870,9 @@ export class SerialConnection {
 			
 			this.port = null;
 			this.logDebug('Disconnect complete, port reference cleared');
+
+			// Emit any trailing partial UTF-8 code point held in the decoder
+			this.flushRxUtf8Decoder();
 			
 			this.callbacks.onDisconnected();
 			this.isDisconnecting = false;
@@ -856,6 +880,7 @@ export class SerialConnection {
 		} else {
 			this.shouldProcessData = false;
 			this.isConnected = false;
+			this.flushRxUtf8Decoder();
 			this.sendStatusMessage('[[ DISCONNECTED ]]');
 			this.callbacks.onDisconnected();
 		}
@@ -867,9 +892,46 @@ export class SerialConnection {
 			return;
 		}
 
+		const port = this.port;
 		try {
-			await this.port.write(data);
-			// Echo sent data to monitor
+			// `port.write()` returns a boolean (backpressure); awaiting it does nothing useful.
+			// Use the write callback so data reaches the native binding before we continue.
+			const chunk = Buffer.from(data, 'utf8');
+			await new Promise<void>((resolve, reject) => {
+				port.write(chunk, (err?: Error | null) => {
+					if (err) {
+						reject(err);
+						return;
+					}
+					// On Windows, `drain()` has been reported to misbehave with USB-serial + loopback
+					// (see node-serialport#1024). Skip drain there; non-Windows still drains so callers
+					// that rely on “fully transmitted” keep reasonable behavior.
+					if (process.platform === 'win32') {
+						resolve();
+						return;
+					}
+					port.drain((drainErr?: Error | null) => {
+						if (drainErr) {
+							reject(drainErr);
+							return;
+						}
+						resolve();
+					});
+				});
+			});
+
+			// Nudge the readable side and yield the event loop so loopback RX can arrive before `[SENT]`.
+			try {
+				const readable = port as import('stream').Readable;
+				if (typeof readable.read === 'function') {
+					readable.read(0);
+				}
+			} catch {
+				// ignore
+			}
+			await new Promise<void>(r => setImmediate(r));
+			await new Promise<void>(r => setImmediate(r));
+
 			this.callbacks.onData(`[SENT] ${data}`);
 		} catch (error: any) {
 			this.callbacks.onError(`Send error: ${error?.message || error}`);

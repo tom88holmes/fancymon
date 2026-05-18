@@ -362,26 +362,6 @@ export class SerialMonitor {
 						}
 						break;
 
-					case 'testBacktrace':
-						const testData = `I [2025-11-26 00:01:47.769](61403) SYSTEM:               [1:          sleep] ending put_playback_manager_to_sleep
-I [2025-11-26 00:01:47.770](61404) BATT:                 [1:          sleep] Starting battery read sleep
-DEBUG: Panic handler called, is_stack_overflow = 0
-DEBUG: Overwriting with panic info
-assert failed: xTaskPriorityDisinherit tasks.c:5107 (pxTCB == pxCurrentTCBs[ xPortGetCoreID() ])
-Backtrace: 0x4037602e:0x3fcb64b0 0x40387ee9:0x3fcb64d0 0x4038cbe1:0x3fcb64f0 0x421daa35:0x3fcb6610 0x403884c3:0x3fcb6630 0x421d8d39:0x3fcb6650 0x4037765b:0x3fcb6690 0x42132eab:0x3fcb66c0 0x4213be8a:0x3fcb66f0 0x42038866:0x3fcb6720 0x4200e3d3:0x3fcb6860 0x42057ca7:0x3fcb6880 0x420585fb:0x3fcb68d0
-ELF file SHA256: aee993fcf7b22503
-Rebooting...
-GPIO10 level: 1, OUT_EN: 0, IN_EN: 1, PU: 1, PD: 0, global_hold: 0, slp_sel: -1
-I (696) cpu_start: Multicore app
-I (697) octal_psram: vendor id    : 0x0d (AP)
-I (697) octal_psram: dev id       : 0x02 (generation 3)
-I (697) octal_psram: density      : 0x03 (64 Mbit)
-I (697) octal_psram: good-die     : 0x01 (Pass)
-`;
-						console.log('FancyMon: Simulating test backtrace data...');
-						this.simulateData(testData);
-						break;
-
 					default:
 						console.warn('FancyMon: Unknown command:', message.command);
 					}
